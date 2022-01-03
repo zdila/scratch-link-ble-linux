@@ -292,11 +292,11 @@ async function discover(ws, filters) {
 
       pathPrefix = path;
 
-      const h = (iface, changed) => {
+      const handleDevicePropsChanged = (iface, changed) => {
         console.log("Dev property", iface, changed);
 
         if (iface === "org.bluez.Device1" && changed["RSSI"]) {
-          propertiesIface.off("PropertiesChanged", h);
+          propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
 
           ws.send(
             JSON.stringify({
@@ -312,7 +312,7 @@ async function discover(ws, filters) {
         }
       };
 
-      propertiesIface.on("PropertiesChanged", h); // on device
+      propertiesIface.on("PropertiesChanged", handleDevicePropsChanged);
 
       return;
     }
