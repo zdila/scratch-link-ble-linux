@@ -156,8 +156,34 @@ wss.on("connection", (ws) => {
           );
         }
       );
+    } else if (data.method === "getServices") {
+      ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: data.id,
+          result: serviceMap.values().map((s) => s.uuid),
+        })
+      );
+    } else if (data.method === "getCharacteristics") {
+      const s = serviceMap
+        .values()
+        .find((s) => s.uuid === data.params.serviceId);
+
+      ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: data.id,
+          result: s
+            ? charMap
+                .values()
+                .filter((c) => c.path.startsWith(s.path))
+                .map((c) => c.uuid)
+            : [],
+        })
+      );
     } else {
       console.error("unknown method");
+
       ws.send(
         JSON.stringify({
           jsonrpc: "2.0",
