@@ -2,6 +2,8 @@ const { createServer } = require("https");
 const { readFileSync } = require("fs");
 const { WebSocketServer } = require("ws");
 const dbus = require("dbus-next");
+const { matchesFilter } = require("./filterMatcher");
+
 const Variant = dbus.Variant;
 
 const bus = dbus.systemBus();
@@ -36,7 +38,7 @@ wss.on("connection", (ws) => {
         })
       );
     } else if (data.method === "discover") {
-      discover(ws);
+      discover(ws, data.params.filters);
 
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: data.id, result: null }));
     } else if (data.method === "connect") {
@@ -190,7 +192,7 @@ let connected = false;
 
 let deviceObj = undefined;
 
-async function discover(ws) {
+async function discover(ws, filters) {
   const bluez = await bus.getProxyObject("org.bluez", "/");
 
   const objectManagerIface = bluez.getInterface(
@@ -245,11 +247,14 @@ async function discover(ws) {
   });
 
   const addIface = async (objPath, props) => {
-    console.log("iface", objPath, props?.["org.bluez.Device1"]?.Name?.value);
+    const device = props?.["org.bluez.Device1"];
+
+    console.log("iface", objPath, device?.Name?.value);
 
     if (
       !pathPrefix &&
-      (props["org.bluez.Device1"]?.Name?.value ?? "").startsWith("intelino")
+      device &&
+      filters.some((filter) => matchesFilter(device, filter))
     ) {
       const obj = await bus.getProxyObject("org.bluez", objPath);
 
@@ -271,7 +276,7 @@ async function discover(ws) {
               method: "didDiscoverPeripheral",
               params: {
                 peripheralId: 0,
-                name: props["org.bluez.Device1"]?.Name?.value,
+                name: device?.Name?.value,
                 rssi: changed["RSSI"].value,
               },
             })
