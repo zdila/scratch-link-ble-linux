@@ -186,6 +186,8 @@ let pathPrefix = undefined;
 
 const charMap = new Map();
 
+const serviceMap = new Map();
+
 let discovering = false;
 
 let connected = false;
@@ -246,23 +248,23 @@ async function discover(ws, filters) {
     process.exit();
   });
 
-  const addIface = async (objPath, props) => {
+  const addIface = async (path, props) => {
     const device = props?.["org.bluez.Device1"];
 
-    console.log("iface", objPath, device?.Name?.value);
+    console.log("iface", path, device?.Name?.value);
 
     if (
       !pathPrefix &&
       device &&
       filters.some((filter) => matchesFilter(device, filter))
     ) {
-      const obj = await bus.getProxyObject("org.bluez", objPath);
+      const obj = await bus.getProxyObject("org.bluez", path);
 
       const propertiesIface = obj.getInterface(
         "org.freedesktop.DBus.Properties"
       );
 
-      pathPrefix = objPath;
+      pathPrefix = path;
 
       const h = (iface, changed) => {
         console.log("Dev property", iface, changed);
@@ -290,16 +292,14 @@ async function discover(ws, filters) {
     }
 
     if (
-      objPath.startsWith(pathPrefix + "/service") &&
-      /\/char[0-9a-z]*$/.test(objPath)
+      path.startsWith(pathPrefix + "/service") &&
+      /\/char[0-9a-z]*$/.test(path)
     ) {
-      const charObj = await bus.getProxyObject("org.bluez", objPath);
+      const obj = await bus.getProxyObject("org.bluez", path);
 
-      const charIface = charObj.getInterface("org.bluez.GattCharacteristic1");
+      const iface = obj.getInterface("org.bluez.GattCharacteristic1");
 
-      const properties = charObj.getInterface(
-        "org.freedesktop.DBus.Properties"
-      );
+      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
 
       const uuid = await properties.Get(
         "org.bluez.GattCharacteristic1",
@@ -308,7 +308,25 @@ async function discover(ws, filters) {
 
       console.log("char:", uuid.value);
 
-      charMap.set(uuid.value, [charIface, charObj]);
+      charMap.set(path, { uuid: uuid.value, path, iface, obj });
+    } else if (
+      path.startsWith(pathPrefix) &&
+      /\/service[0-9a-z]*$/.test(path)
+    ) {
+      const obj = await bus.getProxyObject("org.bluez", path);
+
+      const iface = obj.getInterface("org.bluez.GattService1");
+
+      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
+
+      const [uuid, isPrimary] = await Promise.all([
+        properties.Get("org.bluez.GattService1", "UUID"),
+        properties.Get("org.bluez.GattService1", "Primary"),
+      ]);
+
+      console.log("svc:", uuid.value);
+
+      serviceMap.set(path, { uuid: uuid.value, path, iface, obj, isPrimary });
     }
   };
 
@@ -347,6 +365,8 @@ async function doConnect(ws, path) {
 
             deviceObj = undefined;
 
+            serviceMap.clear();
+
             charMap.clear();
           }
         }
@@ -361,37 +381,53 @@ async function doConnect(ws, path) {
   await srPromise;
 }
 
-async function write(serviceId, characteristicId, msg, withResponse) {
-  console.log(msg);
+// TODO optimize from O(n)
+function getChar(serviceId, characteristicId) {
+  const service = [...serviceMap.values()].find(
+    serviceId ? (s) => s.uuid === serviceId : (s) => s.isPrimary
+  );
 
-  await charMap.get(characteristicId)[0].WriteValue(msg, {
+  if (service) {
+    for (const char of [...charMap.values()]) {
+      if (
+        char.uuid === characteristicId &&
+        char.path.startsWith(service.path)
+      ) {
+        return char;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+async function write(serviceId, characteristicId, msg, withResponse) {
+  await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
     type: new Variant("s", withResponse ? "request" : "command"),
   });
 }
 
 async function startNotifications(serviceId, characteristicId) {
-  const [charIface] = await charMap.get(characteristicId);
+  const { iface } = await getChar(serviceId, characteristicId);
 
-  await charIface.StartNotify();
+  await iface.StartNotify();
 }
 
 async function stopNotifications(serviceId, characteristicId) {
-  const [charIface] = await charMap.get(characteristicId);
+  const { iface } = await getChar(serviceId, characteristicId);
 
-  await charIface.StopNotify();
+  await iface.StopNotify();
 }
 
 async function read(ws, serviceId, characteristicId, startNotifications) {
-  const [charIface, charObj] = await charMap.get(characteristicId);
+  const { iface, obj } = await getChar(serviceId, characteristicId);
 
-  const result = charIface.ReadValue({});
+  const result = iface.ReadValue({});
 
   if (startNotifications) {
-    await charIface.StartNotify();
+    await iface.StartNotify();
 
-    const propertiesIface = charObj.getInterface(
-      "org.freedesktop.DBus.Properties"
-    );
+    const propertiesIface = obj.getInterface("org.freedesktop.DBus.Properties");
 
     propertiesIface.on("PropertiesChanged", (iface, changed) => {
       if (iface === "org.bluez.GattCharacteristic1" && changed["Value"]) {
