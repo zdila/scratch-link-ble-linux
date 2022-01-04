@@ -23,6 +23,26 @@ const wss = new WebSocketServer({ server });
 
 server.listen(20110);
 
+let devicePath = undefined;
+
+const charMap = new Map();
+
+const serviceMap = new Map();
+
+let discovering = false;
+
+let connected = false;
+
+let deviceObj = undefined;
+
+let bluez;
+
+let hci0Obj;
+
+let adapterIface;
+
+let objectManagerIface;
+
 wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     data = JSON.parse(data.toString("UTF-8"));
@@ -42,7 +62,7 @@ wss.on("connection", (ws) => {
 
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: data.id, result: null }));
     } else if (data.method === "connect") {
-      doConnect(ws, pathPrefix).then(
+      connect(ws, data.params.peripheralId).then(
         () => {
           ws.send(
             JSON.stringify({ jsonrpc: "2.0", id: data.id, result: null })
@@ -208,57 +228,10 @@ wss.on("connection", (ws) => {
   });
 });
 
-let pathPrefix = undefined;
+process.on("SIGINT", async () => {
+  console.log("Caught interrupt signal");
 
-const charMap = new Map();
-
-const serviceMap = new Map();
-
-let discovering = false;
-
-let connected = false;
-
-let deviceObj = undefined;
-
-async function discover(ws, filters) {
-  const bluez = await bus.getProxyObject("org.bluez", "/");
-
-  const objectManagerIface = bluez.getInterface(
-    "org.freedesktop.DBus.ObjectManager"
-  );
-
-  const hci0Obj = await bus.getProxyObject("org.bluez", "/org/bluez/hci0");
-
-  const adapterIface = hci0Obj.getInterface("org.bluez.Adapter1");
-
-  const propertiesIface = hci0Obj.getInterface(
-    "org.freedesktop.DBus.Properties"
-  );
-
-  discovering = (await propertiesIface.Get("org.bluez.Adapter1", "Discovering"))
-    .value;
-
-  propertiesIface.on("PropertiesChanged", (iface, changed) => {
-    console.log("Adapter prop changed", iface, changed);
-
-    if ((iface === "org.bluez.Adapter1", changed["Discovering"])) {
-      discovering = changed["Discovering"].value;
-    }
-  });
-
-  await adapterIface.SetDiscoveryFilter({
-    // RSSI: new Variant("n", -120),
-    Transport: new Variant("s", "le"),
-    DuplicateData: new Variant("b", true),
-  });
-
-  if (!discovering) {
-    await adapterIface.StartDiscovery();
-  }
-
-  process.on("SIGINT", async () => {
-    console.log("Caught interrupt signal");
-
+  try {
     if (discovering) {
       await adapterIface.StopDiscovery();
     }
@@ -270,105 +243,141 @@ async function discover(ws, filters) {
 
       await deviceIface.Disconnect();
     }
-
+  } catch (err) {
+    console.error("FOO", err);
+  } finally {
     process.exit();
+  }
+});
+
+let ws, filters;
+
+async function init() {
+  bluez = await bus.getProxyObject("org.bluez", "/");
+
+  hci0Obj = await bus.getProxyObject("org.bluez", "/org/bluez/hci0");
+
+  adapterIface = hci0Obj.getInterface("org.bluez.Adapter1");
+
+  const propertiesIface = hci0Obj.getInterface(
+    "org.freedesktop.DBus.Properties"
+  );
+
+  objectManagerIface = bluez.getInterface("org.freedesktop.DBus.ObjectManager");
+
+  discovering = (await propertiesIface.Get("org.bluez.Adapter1", "Discovering"))
+    .value;
+
+  propertiesIface.on("PropertiesChanged", (iface, changed) => {
+    console.log("Adapter prop changed", iface, changed);
+
+    if ((iface === "org.bluez.Adapter1", changed["Discovering"])) {
+      discovering = changed["Discovering"].value;
+
+      if (!discovering) {
+        objectManagerIface.off("InterfacesAdded", handleInterfaceAdded);
+      }
+    }
   });
 
-  const addIface = async (path, props) => {
-    const device = props?.["org.bluez.Device1"];
+  await adapterIface.SetDiscoveryFilter({
+    // RSSI: new Variant("n", -120),
+    Transport: new Variant("s", "le"),
+    DuplicateData: new Variant("b", true),
+  });
+}
 
-    console.log("iface", path, device?.Name?.value);
+init().catch((err) => {
+  console.error(err);
+});
 
-    if (
-      !pathPrefix &&
-      device &&
-      filters.some((filter) => matchesFilter(device, filter))
-    ) {
-      const obj = await bus.getProxyObject("org.bluez", path);
+async function discover(_ws, _filters) {
+  ws = _ws;
+  filters = _filters;
 
-      const propertiesIface = obj.getInterface(
-        "org.freedesktop.DBus.Properties"
-      );
+  if (!discovering) {
+    await adapterIface.StartDiscovery();
+  }
 
-      pathPrefix = path;
+  objectManagerIface.on("InterfacesAdded", handleInterfaceAdded);
 
-      const handleDevicePropsChanged = (iface, changed) => {
-        console.log("Dev property", iface, changed);
-
-        if (iface === "org.bluez.Device1" && changed["RSSI"]) {
-          propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
-
-          ws.send(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              method: "didDiscoverPeripheral",
-              params: {
-                peripheralId: 0,
-                name: device?.Name?.value,
-                rssi: changed["RSSI"].value,
-              },
-            })
-          );
-        }
-      };
-
-      propertiesIface.on("PropertiesChanged", handleDevicePropsChanged);
-
-      return;
-    }
-
-    if (
-      path.startsWith(pathPrefix + "/service") &&
-      /\/char[0-9a-z]*$/.test(path)
-    ) {
-      const obj = await bus.getProxyObject("org.bluez", path);
-
-      const iface = obj.getInterface("org.bluez.GattCharacteristic1");
-
-      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
-
-      const uuid = await properties.Get(
-        "org.bluez.GattCharacteristic1",
-        "UUID"
-      );
-
-      console.log("char:", uuid.value);
-
-      charMap.set(path, { uuid: uuid.value, path, iface, obj });
-    } else if (
-      path.startsWith(pathPrefix) &&
-      /\/service[0-9a-z]*$/.test(path)
-    ) {
-      const obj = await bus.getProxyObject("org.bluez", path);
-
-      const iface = obj.getInterface("org.bluez.GattService1");
-
-      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
-
-      const [uuid, isPrimary] = await Promise.all([
-        properties.Get("org.bluez.GattService1", "UUID"),
-        properties.Get("org.bluez.GattService1", "Primary"),
-      ]);
-
-      console.log("svc:", uuid.value);
-
-      serviceMap.set(path, { uuid: uuid.value, path, iface, obj, isPrimary });
-    }
-  };
-
-  objectManagerIface.on("InterfacesAdded", addIface);
-
-  for (const [path, o] of Object.entries(
+  for (const [path, props] of Object.entries(
     await objectManagerIface.GetManagedObjects()
   )) {
-    await addIface(path, o);
+    await handleInterfaceAdded(path, props);
   }
 }
 
-async function doConnect(ws, path) {
+async function handleInterfaceAdded(path, props) {
+  const device = props?.["org.bluez.Device1"];
+
+  console.log("iface", path, device?.Name?.value);
+
+  if (device && filters.some((filter) => matchesFilter(device, filter))) {
+    const deviceObj = await bus.getProxyObject("org.bluez", path);
+
+    const propertiesIface = deviceObj.getInterface(
+      "org.freedesktop.DBus.Properties"
+    );
+
+    const handleDevicePropsChanged = (iface, changed) => {
+      console.log("Device property", iface, changed);
+
+      if (iface === "org.bluez.Device1" && changed["RSSI"]) {
+        propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
+
+        ws.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "didDiscoverPeripheral",
+            params: {
+              peripheralId: path,
+              name: device?.Name?.value,
+              rssi: changed["RSSI"].value,
+            },
+          })
+        );
+      }
+    };
+
+    propertiesIface.on("PropertiesChanged", handleDevicePropsChanged);
+  } else if (
+    path.startsWith(devicePath + "/service") &&
+    /\/char[0-9a-z]*$/.test(path)
+  ) {
+    const obj = await bus.getProxyObject("org.bluez", path);
+
+    const iface = obj.getInterface("org.bluez.GattCharacteristic1");
+
+    const properties = obj.getInterface("org.freedesktop.DBus.Properties");
+
+    const uuid = await properties.Get("org.bluez.GattCharacteristic1", "UUID");
+
+    console.log("char:", uuid.value);
+
+    charMap.set(path, { uuid: uuid.value, path, iface, obj });
+  } else if (path.startsWith(devicePath) && /\/service[0-9a-z]*$/.test(path)) {
+    const obj = await bus.getProxyObject("org.bluez", path);
+
+    const iface = obj.getInterface("org.bluez.GattService1");
+
+    const properties = obj.getInterface("org.freedesktop.DBus.Properties");
+
+    const [uuid, isPrimary] = await Promise.all([
+      properties.Get("org.bluez.GattService1", "UUID"),
+      properties.Get("org.bluez.GattService1", "Primary"),
+    ]);
+
+    console.log("svc:", uuid.value);
+
+    serviceMap.set(path, { uuid: uuid.value, path, iface, obj, isPrimary });
+  }
+}
+
+async function connect(ws, path) {
   console.log("CONNECTING");
 
-  pathPrefix = path;
+  devicePath = path;
 
   deviceObj = await bus.getProxyObject("org.bluez", path);
 
@@ -387,7 +396,7 @@ async function doConnect(ws, path) {
           if (!connected) {
             ws.close();
 
-            pathPrefix = undefined;
+            devicePath = undefined;
 
             deviceObj = undefined;
 
@@ -405,6 +414,10 @@ async function doConnect(ws, path) {
   await deviceIface.Connect();
 
   await srPromise;
+
+  if (discovering) {
+    await adapterIface.StopDiscovery();
+  }
 }
 
 // TODO optimize from O(n)
