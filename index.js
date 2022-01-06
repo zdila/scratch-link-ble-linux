@@ -319,10 +319,6 @@ wss.on("connection", (ws) => {
               ws.close();
 
               deviceObj = undefined;
-
-              serviceMap.clear();
-
-              charMap.clear();
             }
           }
         }
