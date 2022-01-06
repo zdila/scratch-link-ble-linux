@@ -1,6 +1,6 @@
 # Scratch Link for BLE devices under Linux
 
-This is quick and dirty implementation of Scratch Link for BLE devices under Linux. For BLE it uses D-Bus.
+This is Scratch Link for BLE devices under Linux. For BLE it uses D-Bus.
 
 So far has been tested only with Intelino smart train.
 
