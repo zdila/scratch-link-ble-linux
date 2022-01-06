@@ -61,12 +61,7 @@ wss.on("connection", (ws) => {
   const send = (data) => {
     dbg("RPC Sending:", data);
 
-    return ws.send(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        ...data,
-      })
-    );
+    return ws.send(JSON.stringify({ jsonrpc: "2.0", ...data }));
   };
 
   ws.on("message", (data) => {
@@ -75,10 +70,7 @@ wss.on("connection", (ws) => {
     dbg("RPC Received:", { id, method, params });
 
     const reply = (data) => {
-      return send({
-        id,
-        ...data,
-      });
+      return send({ id, ...data });
     };
 
     if (method === "getVersion") {
