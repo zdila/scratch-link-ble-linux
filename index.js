@@ -208,7 +208,7 @@ wss.on("connection", (ws) => {
 
     dbg("iface", path, device?.Name?.value);
 
-    if (device && filters.some((filter) => matchesFilter(device, filter))) {
+    if (device && filters?.some((filter) => matchesFilter(device, filter))) {
       const deviceObj = await bus.getProxyObject("org.bluez", path);
 
       const propertiesIface = deviceObj.getInterface(
