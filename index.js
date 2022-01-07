@@ -4,6 +4,14 @@ const { WebSocketServer } = require("ws");
 const dbus = require("dbus-next");
 const { matchesFilter } = require("./filterMatcher");
 
+const GS1 = "org.bluez.GattService1";
+
+const GC1 = "org.bluez.GattCharacteristic1";
+
+const D1 = "org.bluez.Device1";
+
+const PROPS = "org.freedesktop.DBus.Properties";
+
 const debug = process.argv.includes("--debug");
 
 const Variant = dbus.Variant;
@@ -61,7 +69,11 @@ wss.on("connection", (ws) => {
   const send = (data) => {
     dbg("RPC Sending:", data);
 
-    return ws.send(JSON.stringify({ jsonrpc: "2.0", ...data }));
+    return ws.send(JSON.stringify({ jsonrpc: "2.0", ...data }), {}, (err) => {
+      if (err) {
+        console.error("Error sending data to WebSocket:", err);
+      }
+    });
   };
 
   ws.on("message", (data) => {
@@ -71,6 +83,12 @@ wss.on("connection", (ws) => {
 
     const reply = (data) => {
       return send({ id, ...data });
+    };
+
+    const replyError = (err) => {
+      console.error(err);
+
+      return reply({ error: { code: -32603, message: String(err) } });
     };
 
     if (method === "getVersion") {
@@ -86,7 +104,7 @@ wss.on("connection", (ws) => {
     } else if (method === "connect") {
       connect(params.peripheralId).then(
         () => reply({ result: null }),
-        (err) => reply({ error: { code: -32603, message: String(err) } })
+        replyError
       );
     } else if (method === "write") {
       const msg =
@@ -99,10 +117,7 @@ wss.on("connection", (ws) => {
         params.characteristicId,
         msg,
         params.withResponse
-      ).then(
-        () => reply({ result: msg.length }),
-        (err) => reply({ error: { code: -32603, message: String(err) } })
-      );
+      ).then(() => reply({ result: msg.length }), replyError);
     } else if (method === "read") {
       read(
         params.serviceId,
@@ -114,12 +129,12 @@ wss.on("connection", (ws) => {
             result: Buffer.from(result).toString("base64"),
             encoding: "base64",
           }),
-        (err) => reply({ error: { code: -32603, message: String(err) } })
+        replyError
       );
     } else if (method === "startNotifications") {
       startNotifications(params.serviceId, params.characteristicId).then(
         () => reply({ result: null }),
-        (err) => reply({ error: { code: -32603, message: String(err) } })
+        replyError
       );
     } else if (method === "stopNotifications") {
       stopNotifications(params.serviceId, params.characteristicId).then(
@@ -152,14 +167,14 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    for (const task of closeCleanupTasks) {
+    for (const task of [...connectCleanupTasks, ...closeCleanupTasks]) {
       task();
     }
 
     if (deviceObj) {
       dbg("Disconnecting device");
 
-      const deviceIface = deviceObj.getInterface("org.bluez.Device1");
+      const deviceIface = deviceObj.getInterface(D1);
 
       deviceIface
         .Disconnect()
@@ -184,7 +199,7 @@ wss.on("connection", (ws) => {
 
     objectManagerIface.on("InterfacesAdded", handle);
 
-    closeCleanupTasks.push(() => {
+    connectCleanupTasks.push(() => {
       objectManagerIface.off("InterfacesAdded", handle);
     });
 
@@ -196,21 +211,17 @@ wss.on("connection", (ws) => {
   }
 
   async function handleInterfaceAdded(path, props) {
-    const device = props?.["org.bluez.Device1"];
-
-    dbg("iface", path, device?.Name?.value);
+    const device = props?.[D1];
 
     if (device && filters?.some((filter) => matchesFilter(device, filter))) {
       const deviceObj = await bus.getProxyObject("org.bluez", path);
 
-      const propertiesIface = deviceObj.getInterface(
-        "org.freedesktop.DBus.Properties"
-      );
+      const propertiesIface = deviceObj.getInterface(PROPS);
 
       const handleDevicePropsChanged = (iface, changed) => {
-        dbg("Device property", iface, changed);
+        dbg("Device %s props changed:", iface, changed);
 
-        if (iface === "org.bluez.Device1" && changed["RSSI"]) {
+        if (iface === D1 && changed.RSSI) {
           // propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
 
           send({
@@ -218,7 +229,7 @@ wss.on("connection", (ws) => {
             params: {
               peripheralId: path,
               name: device?.Name?.value,
-              rssi: changed["RSSI"].value,
+              rssi: changed.RSSI.value,
             },
           });
         }
@@ -229,48 +240,10 @@ wss.on("connection", (ws) => {
       connectCleanupTasks.push(() => {
         propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
       });
-    } else if (
-      deviceObj &&
-      path.startsWith(deviceObj.path + "/service") &&
-      /\/char[0-9a-z]*$/.test(path)
-    ) {
-      const obj = await bus.getProxyObject("org.bluez", path);
-
-      const iface = obj.getInterface("org.bluez.GattCharacteristic1");
-
-      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
-
-      const uuid = await properties.Get(
-        "org.bluez.GattCharacteristic1",
-        "UUID"
-      );
-
-      dbg("Found GATT Characteristics:", uuid.value);
-
-      charMap.set(path, { uuid: uuid.value, path, iface, obj });
-    } else if (
-      deviceObj &&
-      path.startsWith(deviceObj.path) &&
-      /\/service[0-9a-z]*$/.test(path)
-    ) {
-      const obj = await bus.getProxyObject("org.bluez", path);
-
-      const iface = obj.getInterface("org.bluez.GattService1");
-
-      const properties = obj.getInterface("org.freedesktop.DBus.Properties");
-
-      const [uuid, isPrimary] = await Promise.all([
-        properties.Get("org.bluez.GattService1", "UUID"),
-        properties.Get("org.bluez.GattService1", "Primary"),
-      ]);
-
-      dbg("Found GATT Service:", uuid.value);
-
-      serviceMap.set(path, { uuid: uuid.value, path, iface, obj, isPrimary });
     }
   }
 
-  async function connect(path) {
+  async function connect(devicePath) {
     if (discovering) {
       dbg("Stopping discovery");
 
@@ -281,29 +254,29 @@ wss.on("connection", (ws) => {
       task();
     }
 
-    dbg("Connecting to device", path);
+    connectCleanupTasks.length = 0;
 
-    deviceObj = await bus.getProxyObject("org.bluez", path);
+    dbg("Connecting to device", devicePath);
+
+    deviceObj = await bus.getProxyObject("org.bluez", devicePath);
 
     deviceObjs.add(deviceObj);
 
-    const propertiesIface = deviceObj.getInterface(
-      "org.freedesktop.DBus.Properties"
-    );
+    const propertiesIface = deviceObj.getInterface(PROPS);
 
     const srPromise = new Promise((resolve) => {
       const handlePropertiesChanges = (iface, changed) => {
-        if (iface === "org.bluez.Device1") {
-          if (changed["ServicesResolved"]) {
-            const { value } = changed["ServicesResolved"];
+        if (iface === D1) {
+          if (changed.ServicesResolved) {
+            const { value } = changed.ServicesResolved;
 
             dbg("ServicesResolved:", value);
 
             resolve();
           }
 
-          if (changed["Connected"]) {
-            const { value } = changed["Connected"];
+          if (changed.Connected) {
+            const { value } = changed.Connected;
 
             dbg("Connected:", value);
 
@@ -323,11 +296,45 @@ wss.on("connection", (ws) => {
       });
     });
 
-    const deviceIface = deviceObj.getInterface("org.bluez.Device1");
+    const deviceIface = deviceObj.getInterface(D1);
 
     await deviceIface.Connect();
 
     await srPromise;
+
+    for (const [path, props] of Object.entries(
+      await objectManagerIface.GetManagedObjects()
+    )) {
+      if (
+        path.startsWith(devicePath + "/service") &&
+        /\/char[0-9a-z]*$/.test(path)
+      ) {
+        const uuid = props[GC1].UUID.value;
+
+        dbg("Found GATT Characteristics", uuid);
+
+        const obj = await bus.getProxyObject("org.bluez", path);
+
+        const iface = obj.getInterface(GC1);
+
+        charMap.set(path, { uuid, path, iface, obj });
+      } else if (
+        path.startsWith(devicePath) &&
+        /\/service[0-9a-z]*$/.test(path)
+      ) {
+        const uuid = props[GS1].UUID.value;
+
+        dbg("Found GATT Service", uuid);
+
+        const isPrimary = props[GS1].Primary.value;
+
+        const obj = await bus.getProxyObject("org.bluez", path);
+
+        const iface = obj.getInterface(GS1);
+
+        serviceMap.set(path, { uuid, path, iface, obj, isPrimary });
+      }
+    }
   }
 
   // TODO optimize from O(n)
@@ -347,9 +354,9 @@ wss.on("connection", (ws) => {
       }
     }
 
-    dbg("No such char", serviceId, characteristicId);
+    dbg("No such characteristic", serviceId, characteristicId);
 
-    return undefined;
+    throw new Error("no such characteristic");
   }
 
   async function write(serviceId, characteristicId, msg, withResponse) {
@@ -378,19 +385,17 @@ wss.on("connection", (ws) => {
     if (startNotifications) {
       await iface.StartNotify();
 
-      const propertiesIface = obj.getInterface(
-        "org.freedesktop.DBus.Properties"
-      );
+      const propertiesIface = obj.getInterface(PROPS);
 
       propertiesIface.on("PropertiesChanged", (iface, changed) => {
-        if (iface === "org.bluez.GattCharacteristic1" && changed["Value"]) {
+        if (iface === GC1 && changed.Value) {
           send({
             jsonrpc: "2.0",
             method: "characteristicDidChange",
             params: {
               serviceId,
               characteristicId,
-              message: Buffer.from(changed["Value"].value).toString("base64"),
+              message: Buffer.from(changed.Value.value).toString("base64"),
               encoding: "base64",
             },
           });
@@ -421,7 +426,7 @@ process.on("SIGINT", () => {
     for (const deviceObj of deviceObjs) {
       dbg("Disconnecting");
 
-      const deviceIface = deviceObj.getInterface("org.bluez.Device1");
+      const deviceIface = deviceObj.getInterface(D1);
 
       promises.push(
         deviceIface.Disconnect().catch((err) => {
@@ -441,24 +446,22 @@ async function init() {
 
   adapterIface = hci0Obj.getInterface("org.bluez.Adapter1");
 
-  const propertiesIface = hci0Obj.getInterface(
-    "org.freedesktop.DBus.Properties"
-  );
+  const propertiesIface = hci0Obj.getInterface(PROPS);
 
   objectManagerIface = bluez.getInterface("org.freedesktop.DBus.ObjectManager");
 
   discovering = (await propertiesIface.Get("org.bluez.Adapter1", "Discovering"))
     .value;
 
-  dbg("Discovering", discovering);
+  dbg("Discovering:", discovering);
 
   propertiesIface.on("PropertiesChanged", (iface, changed) => {
-    dbg("Adapter prop changed", iface, changed);
+    dbg("Adapter %s props changed:", iface, changed);
 
-    if ((iface === "org.bluez.Adapter1", changed["Discovering"])) {
-      discovering = changed["Discovering"].value;
+    if ((iface === "org.bluez.Adapter1", changed.Discovering)) {
+      discovering = changed.Discovering.value;
 
-      dbg("Discovering", discovering);
+      dbg("Discovering:", discovering);
     }
   });
 
