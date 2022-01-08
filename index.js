@@ -69,6 +69,12 @@ wss.on("connection", (ws) => {
   const send = (data) => {
     dbg("RPC Sending:", data);
 
+    if (ws.readyState !== ws.OPEN) {
+      console.warn("Can't send, WeboSocket is not  open");
+
+      return;
+    }
+
     return ws.send(JSON.stringify({ jsonrpc: "2.0", ...data }), {}, (err) => {
       if (err) {
         console.error("Error sending data to WebSocket:", err);
@@ -365,42 +371,58 @@ wss.on("connection", (ws) => {
     });
   }
 
+  const notifMap = new Map();
+
   async function startNotifications(serviceId, characteristicId) {
-    const { iface } = await getChar(serviceId, characteristicId);
+    const key = serviceId + ":" + characteristicId;
+
+    if (notifMap.has(key)) {
+      console.warn("Duplicate notification subscription request for ", key);
+
+      return;
+    }
+
+    const { iface, obj } = await getChar(serviceId, characteristicId);
 
     await iface.StartNotify();
+
+    const propertiesIface = obj.getInterface(PROPS);
+
+    const handleNotif = (iface, changed) => {
+      if (iface === GC1 && changed.Value) {
+        send({
+          jsonrpc: "2.0",
+          method: "characteristicDidChange",
+          params: {
+            serviceId,
+            characteristicId,
+            message: Buffer.from(changed.Value.value).toString("base64"),
+            encoding: "base64",
+          },
+        });
+      }
+    };
+
+    propertiesIface.on("PropertiesChanged", handleNotif);
+
+    notifMap.set(key, async () => {
+      propertiesIface.off("PropertiesChanged", handleNotif);
+
+      await iface.StopNotify();
+    });
   }
 
   async function stopNotifications(serviceId, characteristicId) {
-    const { iface } = await getChar(serviceId, characteristicId);
-
-    await iface.StopNotify();
+    await notifMap.get(serviceId + ":" + characteristicId)?.();
   }
 
-  async function read(serviceId, characteristicId, startNotifications) {
-    const { iface, obj } = await getChar(serviceId, characteristicId);
+  async function read(serviceId, characteristicId, startNotif) {
+    const { iface } = await getChar(serviceId, characteristicId);
 
     const result = iface.ReadValue({});
 
-    if (startNotifications) {
-      await iface.StartNotify();
-
-      const propertiesIface = obj.getInterface(PROPS);
-
-      propertiesIface.on("PropertiesChanged", (iface, changed) => {
-        if (iface === GC1 && changed.Value) {
-          send({
-            jsonrpc: "2.0",
-            method: "characteristicDidChange",
-            params: {
-              serviceId,
-              characteristicId,
-              message: Buffer.from(changed.Value.value).toString("base64"),
-              encoding: "base64",
-            },
-          });
-        }
-      });
+    if (startNotif) {
+      await startNotifications(serviceId, characteristicId);
     }
 
     return result;
