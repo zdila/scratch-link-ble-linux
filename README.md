@@ -15,4 +15,6 @@ So far has been tested only with Intelino smart train.
 
 1. in cloned directory run `npm start` (or `npm run debug` to get debug logs)
 1. in browser visit https://device-manager.scratch.mit.edu:20110/ and accept insecure connection
-1. for Intelino smart train visit https://scratch.intelino.com/ and have a fun!
+1. for Intelino smart train
+   - run as `npm start -- --intelino` to print interpreted messages coming from Intelino smart train
+   - visit https://scratch.intelino.com/ and have a fun!

@@ -3,6 +3,7 @@ const { readFileSync } = require("fs");
 const { WebSocketServer } = require("ws");
 const dbus = require("dbus-next");
 const { matchesFilter } = require("./filterMatcher");
+const { intelino } = require("./intelino");
 
 const GS1 = "org.bluez.GattService1";
 
@@ -13,6 +14,8 @@ const D1 = "org.bluez.Device1";
 const PROPS = "org.freedesktop.DBus.Properties";
 
 const debug = process.argv.includes("--debug");
+
+const isIntelino = process.argv.includes("--intelino");
 
 const Variant = dbus.Variant;
 
@@ -394,12 +397,18 @@ wss.on("connection", (ws) => {
 
     const handleNotif = (iface, changed) => {
       if (iface === GC1 && changed.Value) {
+        const b = changed.Value.value;
+
+        if (isIntelino) {
+          intelino(b);
+        }
+
         send({
           method: "characteristicDidChange",
           params: {
             serviceId,
             characteristicId,
-            message: Buffer.from(changed.Value.value).toString("base64"),
+            message: b.toString("base64"),
             encoding: "base64",
           },
         });
