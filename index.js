@@ -70,7 +70,7 @@ wss.on("connection", (ws) => {
     dbg("RPC Sending:", data);
 
     if (ws.readyState !== ws.OPEN) {
-      console.warn("Can't send, WeboSocket is not  open");
+      console.warn("Can't send, WeboSocket is not open");
 
       return;
     }
@@ -391,7 +391,6 @@ wss.on("connection", (ws) => {
     const handleNotif = (iface, changed) => {
       if (iface === GC1 && changed.Value) {
         send({
-          jsonrpc: "2.0",
           method: "characteristicDidChange",
           params: {
             serviceId,
