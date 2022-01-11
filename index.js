@@ -176,6 +176,8 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    dbg("WebSocket connection closed");
+
     for (const task of [...connectCleanupTasks, ...closeCleanupTasks]) {
       task();
     }
