@@ -177,6 +177,10 @@ wss.on("connection", (ws) => {
       task();
     }
 
+    for (const fn of notifMap.values()) {
+      fn();
+    }
+
     if (deviceObj) {
       dbg("Disconnecting device");
 
