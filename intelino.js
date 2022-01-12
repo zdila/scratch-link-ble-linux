@@ -1,4 +1,4 @@
-module.exports = { intelino };
+module.exports = { intelinoBufferToJson };
 
 const directions = ["current", "forward", "backward", "stop", "invert"];
 
@@ -46,110 +46,147 @@ function toHex(dv, separator = " ", offset = 0) {
  *
  * @param {DataView} b
  */
-function intelino(b) {
+function intelinoBufferToJson(b) {
   const mt = b.getUint8(0);
 
-  // const msgLen = b.getUint8(1);
+  switch (mt) {
+    case 0x07:
+      // 07 09 01 0a 01 00 01 03 01 03 00
+      return {
+        type: "VersionDetail",
+        api: [b.getUint8(6), b.getUint8(7)],
+        firmware: [b.getUint8(8), b.getUint8(9), b.getUint8(10)],
+      };
 
-  if (mt === 0x07) {
-    // 07 09 01 0a 01 00 01 03 01 03 00
-    console.log("TrainMsgVersionDetail", {
-      api: [b.getUint8(6), b.getUint8(7)],
-      firmware: [b.getUint8(8), b.getUint8(9), b.getUint8(10)],
-    });
-  } else if (mt === 0x42) {
-    console.log("TrainMsgMacAddress", {
-      mac: toHex(b, ":", 2),
-    });
-  } else if (mt === 0x43) {
-    console.log("TrainMsgTrainUuid", {
-      uuid: toHex(b, "", 2),
-    });
-  } else if (mt === 0x3e) {
-    console.log("TrainMsgStatsLifetimeOdometer", {
-      odoCm: b.getUint32(2),
-    });
-  } else if (mt === 0xb7) {
-    const dir = directions[b.getUint8(2)];
+    case 0x42:
+      return {
+        type: "MacAddress",
+        mac: toHex(b, ":", 2),
+      };
 
-    const speed = b.getUint16(3);
-
-    const pwm = b.getUint8(5);
-
-    const speedControl = Boolean(b.getUint8(6));
-
-    const desiredSpeed = b.getUint16(7);
-
-    const pauseTime = b.getUint8(9);
-
-    const nextDecision = b.getUint8(10);
-
-    const odo = b.getUint32(14);
-
-    console.log("TrainMsgMovement", {
-      dir,
-      speed,
-      desiredSpeed,
-      pwm,
-      speedControl,
-      pauseTime,
-      nextDecision: decisions[nextDecision] ?? "?" + nextDecision,
-      odo,
-    });
-  } else if (mt === 0xe0) {
-    const cmd = b.getUint8(2);
-
-    const ts = b.getUint32(3) / 1000;
-
-    if (cmd === 0x01) {
-      console.log("MOVEMENT_DIRECTION_CHANGED", {
-        ts,
-        direction: directions[b.getUint8(7)] ?? "?" + b.getUint8(7),
-      });
-    } else if (cmd === 0x02) {
-      console.log("LOW_BATTERY", { ts });
-    } else if (cmd === 0x03) {
-      console.log("BATTERY_CUT_OFF", { ts });
-    } else if (cmd === 0x04) {
-      console.log("CHARGING_STATE_CHANGED", {
-        ts,
-        charging: Boolean(b.getUint8(7)),
-      });
-    } else if (cmd === 0x05) {
-      console.log("BUTTON_PRESS_DETECTED", {
-        ts,
-        pressDuration:
-          [undefined, "short", "long"][b.getUint8(7)] ?? "?" + b.getUint8(7),
-      });
-    } else if ((cmd === 0x06, cmd === 0x09)) {
-      const counter = b.getUint8(7);
-      const c1 = colors[b.getUint8(8)];
-      const c2 = colors[b.getUint8(9)];
-      const c3 = colors[b.getUint8(10)];
-      const c4 = colors[b.getUint8(11)];
-
-      console.log(
-        "%s ",
-        cmd === 0x06 ? "SNAP_COMMAND_EXECUTED" : "SNAP_COMMAND_DETECTED",
-        { ts, counter, c1, c2, c3, c4 }
+    case 0x43:
+      return (
+        "TrainUuid",
+        {
+          uuid: toHex(b, "", 2),
+        }
       );
-    } else if ([0x07, 0x08].includes(cmd)) {
-      console.log("COLOR_CHANGED", {
-        ts,
-        sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : "?",
-        color: colors[b.getUint8(11)] ?? "?" + b.getUint8(11),
-        dist: b.getUint32(7),
-      });
-    } else if (cmd === 0x0a) {
-      console.log("SPLIT_DECISION", {
-        ts,
-        decision: decisions[b.getUint8(7)] ?? "?" + b.getUint8(7),
-        dist: b.getUint32(8),
-      });
-    } else {
-      console.log("UNKNOWN", toHex(b));
+
+    case 0x3e:
+      return {
+        type: "StatsLifetimeOdometer",
+        odoCm: b.getUint32(2),
+      };
+
+    case 0xb7: {
+      const dir = directions[b.getUint8(2)];
+
+      const speed = b.getUint16(3);
+
+      const pwm = b.getUint8(5);
+
+      const speedControl = Boolean(b.getUint8(6));
+
+      const desiredSpeed = b.getUint16(7);
+
+      const pauseTime = b.getUint8(9);
+
+      const nextDecision = b.getUint8(10);
+
+      const odo = b.getUint32(14);
+
+      return {
+        type: "Movement",
+        dir,
+        speed,
+        desiredSpeed,
+        pwm,
+        speedControl,
+        pauseTime,
+        nextDecision: decisions[nextDecision] ?? "?" + nextDecision,
+        odo,
+      };
     }
-  } else {
-    console.log("UNKNOWN", toHex(b));
+
+    case 0xe0: {
+      const cmd = b.getUint8(2);
+
+      const ts = b.getUint32(3) / 1000;
+
+      switch (cmd) {
+        case 0x01:
+          return {
+            type: "EventMovementDirectionChanged",
+            ts,
+            direction: directions[b.getUint8(7)] ?? "?" + b.getUint8(7),
+          };
+
+        case 0x02:
+          return { type: "EventLowBattery", ts };
+
+        case 0x03:
+          return { type: "EventLowBatteryCutOff", ts };
+
+        case 0x04:
+          return {
+            type: "EventChargingStateChanged",
+            ts,
+            charging: Boolean(b.getUint8(7)),
+          };
+
+        case 0x05:
+          return {
+            type: "EventButtonPressDetected",
+            ts,
+            pressDuration:
+              [undefined, "short", "long"][b.getUint8(7)] ??
+              "?" + b.getUint8(7),
+          };
+
+        case 0x06:
+        case 0x09: {
+          const counter = b.getUint8(7);
+          const c1 = colors[b.getUint8(8)];
+          const c2 = colors[b.getUint8(9)];
+          const c3 = colors[b.getUint8(10)];
+          const c4 = colors[b.getUint8(11)];
+
+          return {
+            type:
+              cmd === 0x06
+                ? "EventSnapCommandExecuted"
+                : "EventSnapCommandDetected",
+            ts,
+            counter,
+            c1,
+            c2,
+            c3,
+            c4,
+          };
+        }
+
+        case 0x07:
+        case 0x08:
+          return {
+            type: "EventColorChanged",
+            ts,
+            sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : "?",
+            color: colors[b.getUint8(11)] ?? "?" + b.getUint8(11),
+            dist: b.getUint32(7),
+          };
+
+        case 0x0a:
+          return {
+            type: "EventSplitDecision",
+            ts,
+            decision: decisions[b.getUint8(7)] ?? "?" + b.getUint8(7),
+            dist: b.getUint32(8),
+          };
+      }
+
+      break;
+    }
   }
+
+  return { type: "Unknown", payload: toHex(b) };
 }

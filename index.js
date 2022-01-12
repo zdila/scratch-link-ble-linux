@@ -3,7 +3,7 @@ const { readFileSync } = require("fs");
 const { WebSocketServer } = require("ws");
 const dbus = require("dbus-next");
 const { matchesFilter } = require("./filterMatcher");
-const { intelino } = require("./intelino");
+const { intelinoBufferToJson } = require("./intelino");
 
 const GS1 = "org.bluez.GattService1";
 
@@ -100,78 +100,111 @@ wss.on("connection", (ws) => {
       return reply({ error: { code: -32603, message: String(err) } });
     };
 
-    if (method === "getVersion") {
-      reply({ result: { protocol: "1.3" } });
-    } else if (method === "discover") {
-      filters = params.filters;
+    switch (method) {
+      case "getVersion":
+        reply({ result: { protocol: "1.3" } });
 
-      discover().catch((err) => {
-        console.error(err);
-      });
+        break;
 
-      reply({ result: null });
-    } else if (method === "connect") {
-      connect(params.peripheralId).then(
-        () => reply({ result: null }),
-        replyError
-      );
-    } else if (method === "write") {
-      const msg =
-        params.encoding === "base64"
-          ? [...Buffer.from(params.message, "base64").values()]
-          : params.message;
+      case "discover":
+        filters = params.filters;
 
-      write(
-        params.serviceId,
-        params.characteristicId,
-        msg,
-        params.withResponse
-      ).then(() => reply({ result: msg.length }), replyError);
-    } else if (method === "read") {
-      read(
-        params.serviceId,
-        params.characteristicId,
-        params.startNotifications
-      ).then(
-        (result) =>
-          reply({
-            result: Buffer.from(result).toString("base64"),
-            encoding: "base64",
-          }),
-        replyError
-      );
-    } else if (method === "startNotifications") {
-      startNotifications(params.serviceId, params.characteristicId).then(
-        () => reply({ result: null }),
-        replyError
-      );
-    } else if (method === "stopNotifications") {
-      stopNotifications(params.serviceId, params.characteristicId).then(
-        () => reply({ result: null }),
-        (err) => reply({ error: String(err) })
-      );
-    } else if (method === "getServices") {
-      reply({ result: serviceMap.values().map((s) => s.uuid) });
-    } else if (method === "getCharacteristics") {
-      const s = serviceMap.values().find((s) => s.uuid === params.serviceId);
+        discover().catch((err) => {
+          console.error(err);
+        });
 
-      reply({
-        result: s
-          ? charMap
-              .values()
-              .filter((c) => c.path.startsWith(s.path))
-              .map((c) => c.uuid)
-          : [],
-      });
-    } else {
-      console.error("unknown method");
+        reply({ result: null });
 
-      reply({
-        error: {
-          code: -32601,
-          message: "Method not found",
-        },
-      });
+        break;
+
+      case "connect":
+        connect(params.peripheralId).then(
+          () => reply({ result: null }),
+          replyError
+        );
+
+        break;
+
+      case "write":
+        {
+          const msg =
+            params.encoding === "base64"
+              ? [...Buffer.from(params.message, "base64").values()]
+              : params.message;
+
+          write(
+            params.serviceId,
+            params.characteristicId,
+            msg,
+            params.withResponse
+          ).then(() => reply({ result: msg.length }), replyError);
+        }
+
+        break;
+
+      case "read":
+        read(
+          params.serviceId,
+          params.characteristicId,
+          params.startNotifications
+        ).then(
+          (result) =>
+            reply({
+              result: Buffer.from(result).toString("base64"),
+              encoding: "base64",
+            }),
+          replyError
+        );
+
+        break;
+
+      case "startNotifications":
+        startNotifications(params.serviceId, params.characteristicId).then(
+          () => reply({ result: null }),
+          replyError
+        );
+
+        break;
+
+      case "stopNotifications":
+        stopNotifications(params.serviceId, params.characteristicId).then(
+          () => reply({ result: null }),
+          (err) => reply({ error: String(err) })
+        );
+
+        break;
+
+      case "getServices":
+        reply({ result: serviceMap.values().map((s) => s.uuid) });
+
+        break;
+
+      case "getCharacteristics": {
+        const s = serviceMap.values().find((s) => s.uuid === params.serviceId);
+
+        reply({
+          result: s
+            ? charMap
+                .values()
+                .filter((c) => c.path.startsWith(s.path))
+                .map((c) => c.uuid)
+            : [],
+        });
+
+        break;
+      }
+
+      default:
+        console.error("unknown method");
+
+        reply({
+          error: {
+            code: -32601,
+            message: "Method not found",
+          },
+        });
+
+        break;
     }
   });
 
@@ -402,7 +435,11 @@ wss.on("connection", (ws) => {
         const b = changed.Value.value;
 
         if (isIntelino) {
-          intelino(new DataView(b.buffer, b.byteOffset, b.byteLength));
+          console.log(
+            intelinoBufferToJson(
+              new DataView(b.buffer, b.byteOffset, b.byteLength)
+            )
+          );
         }
 
         send({
