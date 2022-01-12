@@ -4,18 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node .",
-    "debug": "node . --debug"
+    "start": "ts-node src",
+    "debug": "ts-node src --debug"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "dbus-next": "^0.10.2",
+    "ts-node": "^10.4.0",
     "ws": "^8.4.0"
   },
   "devDependencies": {
+    "@types/node": "^17.0.8",
+    "@types/ws": "^8.2.2",
     "eslint": "^8.6.0",
-    "prettier": "^2.5.1"
+    "prettier": "^2.5.1",
+    "typescript": "^4.5.4"
   }
 }

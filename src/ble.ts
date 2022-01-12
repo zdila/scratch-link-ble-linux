@@ -1,8 +1,6 @@
-const dbus = require("dbus-next");
-
-const { debug } = require("./debug");
-
-const { matchesFilter } = require("./filterMatcher");
+import dbus, { Variant } from "dbus-next";
+import { debug } from "./debug";
+import { Device, Filter, matchesFilter } from "./filterMatcher";
 
 const GS1 = "org.bluez.GattService1";
 
@@ -12,26 +10,53 @@ const D1 = "org.bluez.Device1";
 
 const PROPS = "org.freedesktop.DBus.Properties";
 
-const Variant = dbus.Variant;
-
 const bus = dbus.systemBus();
 
 let discovering = false;
 
-let bluez;
+let bluez: dbus.ProxyObject;
 
-let hci0Obj;
+let hci0Obj: dbus.ProxyObject;
 
-let adapterIface;
+let adapterIface: dbus.ClientInterface;
 
-let objectManagerIface;
+let objectManagerIface: dbus.ClientInterface;
 
-const deviceObjs = new Set();
+const deviceObjs = new Set<dbus.ProxyObject>();
+
+type EventName =
+  | "disconnected"
+  | "didDiscoverPeripheral"
+  | "characteristicDidChange";
+
+type CharacteristicDidChangeParams = {
+  serviceId: string | null;
+  characteristicId: string;
+  message: Buffer;
+};
+
+type DidDiscoverPeripheralParams = {
+  peripheralId: string;
+  name?: string;
+  rssi: number;
+};
 
 function createSession() {
-  const eventListeners = new Map();
+  const eventListeners = new Map<EventName, Set<(params: any) => void>>();
 
-  function on(type, callback) {
+  function on(type: "disconnected", callback: () => void): void;
+
+  function on(
+    type: "didDiscoverPeripheral",
+    callback: (params: DidDiscoverPeripheralParams) => void
+  ): void;
+
+  function on(
+    type: "characteristicDidChange",
+    callback: (params: CharacteristicDidChangeParams) => void
+  ): void;
+
+  function on(type: EventName, callback: (params?: any) => void): void {
     let s = eventListeners.get(type);
 
     if (!s) {
@@ -42,43 +67,71 @@ function createSession() {
 
     s.add(callback);
 
-    return () => {
-      off(type, callback);
-    };
+    // return () => {
+    //   off(type, callback);
+    // };
   }
 
-  function off(type, callback) {
-    eventListeners.get(type).delete(callback);
+  function off(type: EventName, callback: () => void) {
+    eventListeners.get(type)?.delete(callback);
   }
 
-  function fire(type, params) {
+  function fire(type: "disconnected"): void;
+
+  function fire(
+    type: "characteristicDidChange",
+    params: CharacteristicDidChangeParams
+  ): void;
+
+  function fire(
+    type: "didDiscoverPeripheral",
+    params: DidDiscoverPeripheralParams
+  ): void;
+
+  function fire(type: EventName, params?: any) {
     for (const callback of eventListeners.get(type) ?? []) {
       callback(params);
     }
   }
 
-  let deviceObj = undefined;
+  let deviceObj: dbus.ProxyObject | undefined;
 
-  const charMap = new Map();
+  const charMap = new Map<
+    string,
+    {
+      uuid: string;
+      path: string;
+      iface: dbus.ClientInterface;
+      obj: dbus.ProxyObject;
+    }
+  >();
 
-  const serviceMap = new Map();
+  const serviceMap = new Map<
+    string,
+    {
+      uuid: string;
+      path: string;
+      iface: dbus.ClientInterface;
+      obj: dbus.ProxyObject;
+      isPrimary: boolean;
+    }
+  >();
 
-  let filters;
+  let filters: Filter[] | undefined;
 
-  const connectCleanupTasks = [];
+  const connectCleanupTasks: (() => void)[] = [];
 
-  const closeCleanupTasks = [];
+  const closeCleanupTasks: (() => void)[] = [];
 
   function getServices() {
-    return serviceMap.values().map((s) => s.uuid);
+    return [...serviceMap.values()].map((s) => s.uuid);
   }
 
-  function getCharacteristics(serviceId) {
-    const service = serviceMap.values().find((s) => s.uuid === serviceId);
+  function getCharacteristics(serviceId: string) {
+    const service = [...serviceMap.values()].find((s) => s.uuid === serviceId);
 
     service
-      ? charMap
-          .values()
+      ? [...charMap.values()]
           .filter((c) => c.path.startsWith(service.path))
           .map((c) => c.uuid)
       : [];
@@ -102,7 +155,7 @@ function createSession() {
     }
   }
 
-  async function discover(filtersParam) {
+  async function discover(filtersParam: Filter[]) {
     filters = filtersParam;
 
     if (!discovering) {
@@ -111,8 +164,8 @@ function createSession() {
       await adapterIface.StartDiscovery();
     }
 
-    const handle = (...params) => {
-      handleInterfaceAdded(...params).catch((err) => {
+    const handle = (path: string, props?: Record<string, unknown>) => {
+      handleInterfaceAdded(path, props).catch((err: unknown) => {
         console.error(err);
       });
     };
@@ -126,26 +179,38 @@ function createSession() {
     for (const [path, props] of Object.entries(
       await objectManagerIface.GetManagedObjects()
     )) {
-      await handleInterfaceAdded(path, props);
+      await handleInterfaceAdded(path, props as any);
     }
   }
 
-  async function handleInterfaceAdded(path, props) {
-    const device = props?.[D1];
+  async function handleInterfaceAdded(
+    path: string,
+    props?: Record<string, unknown>
+  ) {
+    const device = props?.[D1] as Device | undefined;
 
-    if (device && filters?.some((filter) => matchesFilter(device, filter))) {
+    if (
+      device &&
+      filters?.some((filter) => matchesFilter(device as any, filter))
+    ) {
       const deviceObj = await bus.getProxyObject("org.bluez", path);
 
       const propertiesIface = deviceObj.getInterface(PROPS);
 
-      const handleDevicePropsChanged = (iface, changed) => {
+      const handleDevicePropsChanged = (
+        iface: string,
+        changed: { RSSI?: unknown }
+      ) => {
         debug("Device %s props changed:", iface, changed);
 
         if (iface === D1 && changed.RSSI) {
           fire("didDiscoverPeripheral", {
             peripheralId: path,
             name: device?.Name?.value,
-            rssi: changed.RSSI.value,
+            rssi:
+              changed.RSSI instanceof Variant
+                ? Number(changed.RSSI.value)
+                : 127,
           });
         }
       };
@@ -158,7 +223,7 @@ function createSession() {
     }
   }
 
-  async function connect(devicePath) {
+  async function connect(devicePath: string) {
     if (discovering) {
       debug("Stopping discovery");
 
@@ -179,18 +244,23 @@ function createSession() {
 
     const propertiesIface = deviceObj.getInterface(PROPS);
 
-    const srPromise = new Promise((resolve) => {
-      const handlePropertiesChanges = (iface, changed) => {
+    const srPromise = new Promise<void>((resolve) => {
+      const handlePropertiesChanges = (
+        iface: string,
+        changed: Record<string, unknown>
+      ) => {
         if (iface === D1) {
-          if (changed.ServicesResolved) {
+          if (changed.ServicesResolved instanceof Variant) {
             const { value } = changed.ServicesResolved;
 
             debug("ServicesResolved:", value);
 
-            resolve();
+            if (value) {
+              resolve();
+            }
           }
 
-          if (changed.Connected) {
+          if (changed.Connected instanceof Variant) {
             const { value } = changed.Connected;
 
             debug("Connected:", value);
@@ -217,14 +287,16 @@ function createSession() {
 
     await srPromise;
 
-    for (const [path, props] of Object.entries(
+    for (const [path, props0] of Object.entries(
       await objectManagerIface.GetManagedObjects()
     )) {
+      const props = props0 as Record<string, Record<string, Variant>>;
+
       if (
         path.startsWith(devicePath + "/service") &&
         /\/char[0-9a-z]*$/.test(path)
       ) {
-        const uuid = props[GC1].UUID.value;
+        const uuid: string = props[GC1].UUID.value;
 
         debug("Found GATT Characteristics", uuid);
 
@@ -237,7 +309,7 @@ function createSession() {
         path.startsWith(devicePath) &&
         /\/service[0-9a-z]*$/.test(path)
       ) {
-        const uuid = props[GS1].UUID.value;
+        const uuid: string = props[GS1].UUID.value;
 
         debug("Found GATT Service", uuid);
 
@@ -253,7 +325,7 @@ function createSession() {
   }
 
   // TODO optimize from O(n)
-  function getChar(serviceId, characteristicId) {
+  function getChar(serviceId: string | null, characteristicId: string) {
     const service = [...serviceMap.values()].find(
       serviceId ? (s) => s.uuid === serviceId : (s) => s.isPrimary
     );
@@ -274,15 +346,23 @@ function createSession() {
     throw new Error("no such characteristic");
   }
 
-  async function write(serviceId, characteristicId, msg, withResponse) {
-    await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
+  async function write(
+    serviceId: string | null,
+    characteristicId: string,
+    msg: Buffer,
+    withResponse: boolean
+  ) {
+    getChar(serviceId, characteristicId).iface.WriteValue(msg, {
       type: new Variant("s", withResponse ? "request" : "command"),
     });
   }
 
   const notifMap = new Map();
 
-  async function startNotifications(serviceId, characteristicId) {
+  async function startNotifications(
+    serviceId: string | null,
+    characteristicId: string
+  ) {
     const key = serviceId + ":" + characteristicId;
 
     if (notifMap.has(key)) {
@@ -291,14 +371,14 @@ function createSession() {
       return;
     }
 
-    const { iface, obj } = await getChar(serviceId, characteristicId);
+    const { iface, obj } = getChar(serviceId, characteristicId);
 
     await iface.StartNotify();
 
     const propertiesIface = obj.getInterface(PROPS);
 
-    const handleNotif = (iface, changed) => {
-      if (iface === GC1 && changed.Value) {
+    const handleNotif = (iface: string, changed: Record<string, unknown>) => {
+      if (iface === GC1 && changed.Value instanceof Variant) {
         fire("characteristicDidChange", {
           serviceId,
           characteristicId,
@@ -316,12 +396,19 @@ function createSession() {
     });
   }
 
-  async function stopNotifications(serviceId, characteristicId) {
+  async function stopNotifications(
+    serviceId: string | null,
+    characteristicId: string
+  ) {
     await notifMap.get(serviceId + ":" + characteristicId)?.();
   }
 
-  async function read(serviceId, characteristicId, startNotif) {
-    const { iface } = await getChar(serviceId, characteristicId);
+  async function read(
+    serviceId: string | null,
+    characteristicId: string,
+    startNotif = false
+  ) {
+    const { iface } = getChar(serviceId, characteristicId);
 
     const result = iface.ReadValue({});
 
@@ -347,7 +434,7 @@ function createSession() {
   };
 }
 
-async function initBle() {
+export async function initBle() {
   if (bluez) {
     throw new Error("already initialized");
   }
@@ -367,15 +454,21 @@ async function initBle() {
 
   debug("Discovering:", discovering);
 
-  propertiesIface.on("PropertiesChanged", (iface, changed) => {
-    debug("Adapter %s props changed:", iface, changed);
+  propertiesIface.on(
+    "PropertiesChanged",
+    (iface, changed: Record<string, unknown>) => {
+      debug("Adapter %s props changed:", iface, changed);
 
-    if ((iface === "org.bluez.Adapter1", changed.Discovering)) {
-      discovering = changed.Discovering.value;
+      if (
+        iface === "org.bluez.Adapter1" &&
+        changed.Discovering instanceof Variant
+      ) {
+        discovering = changed.Discovering.value;
 
-      debug("Discovering:", discovering);
+        debug("Discovering:", discovering);
+      }
     }
-  });
+  );
 
   await adapterIface.SetDiscoveryFilter({
     Transport: new Variant("s", "le"),
@@ -391,8 +484,8 @@ async function initBle() {
         debug("Stopping discovery");
 
         promises.push(
-          adapterIface.StopDiscovery().catch((err) => {
-            console.err("Error StopDiscovery:", err);
+          adapterIface.StopDiscovery().catch((err: unknown) => {
+            console.error("Error StopDiscovery:", err);
           })
         );
       }
@@ -403,8 +496,8 @@ async function initBle() {
         const deviceIface = deviceObj.getInterface(D1);
 
         promises.push(
-          deviceIface.Disconnect().catch((err) => {
-            console.err("Error Disconnect:", err);
+          deviceIface.Disconnect().catch((err: unknown) => {
+            console.error("Error Disconnect:", err);
           })
         );
       }
@@ -415,5 +508,3 @@ async function initBle() {
 
   return { createSession };
 }
-
-module.exports = { initBle };

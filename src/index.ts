@@ -1,16 +1,10 @@
-const { createServer } = require("https");
-
-const { readFileSync } = require("fs");
-
-const { WebSocketServer } = require("ws");
-
-const { initBle } = require("./ble");
-
-const { Buffer } = require("buffer");
-
-const { intelinoBufferToJson } = require("./intelino");
-
-const { debug } = require("./debug");
+import { createServer } from "https";
+import { readFileSync } from "fs";
+import { WebSocketServer } from "ws";
+import { initBle } from "./ble";
+import { Buffer } from "buffer";
+import { intelinoBufferToJson } from "./intelino";
+import { debug } from "./debug";
 
 initBle()
   .then(({ createSession }) => {
@@ -18,8 +12,8 @@ initBle()
 
     const server = createServer(
       {
-        cert: readFileSync("scratch-device-manager.cer"),
-        key: readFileSync("scratch-device-manager.key"),
+        cert: readFileSync("cert/scratch-device-manager.cer"),
+        key: readFileSync("cert/scratch-device-manager.key"),
       },
       (req, res) => {
         res.writeHead(200);
@@ -36,7 +30,7 @@ initBle()
 
       const session = createSession();
 
-      const send = (data) => {
+      const send = (data: Record<string, unknown>) => {
         debug("RPC Sending:", data);
 
         if (ws.readyState !== ws.OPEN) {
@@ -57,15 +51,15 @@ initBle()
       };
 
       ws.on("message", (data) => {
-        const { id, method, params } = JSON.parse(data.toString("UTF-8"));
+        const { id, method, params } = JSON.parse(data.toString("utf8"));
 
         debug("RPC Received:", { id, method, params });
 
-        const reply = (data) => {
+        const reply = (data: Record<string, unknown>) => {
           return send({ id, ...data });
         };
 
-        const replyError = (err) => {
+        const replyError = (err: unknown) => {
           console.error(err);
 
           return reply({ error: { code: -32603, message: String(err) } });
@@ -140,7 +134,7 @@ initBle()
               .stopNotifications(params.serviceId, params.characteristicId)
               .then(
                 () => reply({ result: null }),
-                (err) => reply({ error: String(err) })
+                (err: unknown) => reply({ error: String(err) })
               );
 
             break;

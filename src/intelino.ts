@@ -1,5 +1,3 @@
-module.exports = { intelinoBufferToJson };
-
 const directions = ["current", "forward", "backward", "stop", "invert"];
 
 const colors = [
@@ -25,12 +23,7 @@ const decisions = [
   "all",
 ];
 
-/**
- *
- * @param {DataView} dv
- * @returns
- */
-function toHex(dv, separator = " ", offset = 0) {
+function toHex(dv: DataView, separator = " ", offset = 0) {
   return [
     ...new Uint8Array(
       dv.buffer,
@@ -42,11 +35,7 @@ function toHex(dv, separator = " ", offset = 0) {
     .join(separator);
 }
 
-/**
- *
- * @param {DataView} b
- */
-function intelinoBufferToJson(b) {
+export function intelinoBufferToJson(b: DataView) {
   const mt = b.getUint8(0);
 
   switch (mt) {
