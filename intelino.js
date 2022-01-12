@@ -65,12 +65,10 @@ function intelinoBufferToJson(b) {
       };
 
     case 0x43:
-      return (
-        "TrainUuid",
-        {
-          uuid: toHex(b, "", 2),
-        }
-      );
+      return {
+        type: "TrainUuid",
+        uuid: toHex(b, "", 2),
+      };
 
     case 0x3e:
       return {
