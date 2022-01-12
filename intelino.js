@@ -27,45 +27,64 @@ const decisions = [
 
 /**
  *
- * @param {Buffer} b
+ * @param {DataView} dv
+ * @returns
+ */
+function toHex(dv, separator = " ", offset = 0) {
+  return [
+    ...new Uint8Array(
+      dv.buffer,
+      dv.byteOffset + offset,
+      dv.byteLength - offset
+    ),
+  ]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join(separator);
+}
+
+/**
+ *
+ * @param {DataView} b
  */
 function intelino(b) {
-  // const msgLen = b.readUInt8(1);
+  const mt = b.getUint8(0);
 
-  if (b.readUInt8(0) === 0x07) {
+  // const msgLen = b.getUint8(1);
+
+  if (mt === 0x07) {
     // 07 09 01 0a 01 00 01 03 01 03 00
     console.log("TrainMsgVersionDetail", {
-      api: [b.readUInt8(6), b.readUInt8(7)],
-      firmware: [b.readUInt8(8), b.readUInt8(9), b.readUInt8(10)],
+      api: [b.getUint8(6), b.getUint8(7)],
+      firmware: [b.getUint8(8), b.getUint8(9), b.getUint8(10)],
     });
-  } else if (b.readUInt8(0) === 0x42) {
+  } else if (mt === 0x42) {
     console.log("TrainMsgMacAddress", {
-      mac: b.slice(2).toString("hex").replace(/(..)/g, "$1 ").trim(),
+      mac: toHex(b, ":", 2),
     });
-  } else if (b.readUInt8(0) === 0x43) {
+  } else if (mt === 0x43) {
     console.log("TrainMsgTrainUuid", {
-      mac: b.slice(2).toString("hex").replace(/(..)/g, "$1 ").trim(),
+      uuid: toHex(b, "", 2),
     });
-  } else if (b.readUInt8(0) === 0x3e) {
+  } else if (mt === 0x3e) {
     console.log("TrainMsgStatsLifetimeOdometer", {
-      odoCm: b.readUInt32BE(2),
+      odoCm: b.getUint32(2),
     });
-  } else if (b.readUInt8(0) === 0xb7) {
-    const dir = directions[b.readUInt8(2)];
+  } else if (mt === 0xb7) {
+    const dir = directions[b.getUint8(2)];
 
-    const speed = b.readUInt16BE(3);
+    const speed = b.getUint16(3);
 
-    const pwm = b.readUInt8(5);
+    const pwm = b.getUint8(5);
 
-    const speedControl = Boolean(b.readUInt8(6));
+    const speedControl = Boolean(b.getUint8(6));
 
-    const desiredSpeed = b.readUInt16BE(7);
+    const desiredSpeed = b.getUint16(7);
 
-    const pauseTime = b.readUInt8(9);
+    const pauseTime = b.getUint8(9);
 
-    const nextDecision = b.readUInt8(10);
+    const nextDecision = b.getUint8(10);
 
-    const odo = b.readUInt32BE(14);
+    const odo = b.getUint32(14);
 
     console.log("TrainMsgMovement", {
       dir,
@@ -77,15 +96,15 @@ function intelino(b) {
       nextDecision: decisions[nextDecision] ?? "?" + nextDecision,
       odo,
     });
-  } else if (b.readUInt8(0) === 0xe0) {
-    const cmd = b.readUInt8(2);
+  } else if (mt === 0xe0) {
+    const cmd = b.getUint8(2);
 
-    const ts = b.readUInt32BE(3) / 1000;
+    const ts = b.getUint32(3) / 1000;
 
     if (cmd === 0x01) {
       console.log("MOVEMENT_DIRECTION_CHANGED", {
         ts,
-        direction: directions[b.readUInt8(7)] ?? "?" + b.readUInt8(7),
+        direction: directions[b.getUint8(7)] ?? "?" + b.getUint8(7),
       });
     } else if (cmd === 0x02) {
       console.log("LOW_BATTERY", { ts });
@@ -94,20 +113,20 @@ function intelino(b) {
     } else if (cmd === 0x04) {
       console.log("CHARGING_STATE_CHANGED", {
         ts,
-        charging: Boolean(b.readUInt8(7)),
+        charging: Boolean(b.getUint8(7)),
       });
     } else if (cmd === 0x05) {
       console.log("BUTTON_PRESS_DETECTED", {
         ts,
-        type:
-          [undefined, "short", "long"][b.readUInt8(7)] ?? "?" + b.readUInt8(7),
+        pressDuration:
+          [undefined, "short", "long"][b.getUint8(7)] ?? "?" + b.getUint8(7),
       });
     } else if ((cmd === 0x06, cmd === 0x09)) {
-      const counter = b.readUInt8(7);
-      const c1 = colors[b.readUInt8(8)];
-      const c2 = colors[b.readUInt8(9)];
-      const c3 = colors[b.readUInt8(10)];
-      const c4 = colors[b.readUInt8(11)];
+      const counter = b.getUint8(7);
+      const c1 = colors[b.getUint8(8)];
+      const c2 = colors[b.getUint8(9)];
+      const c3 = colors[b.getUint8(10)];
+      const c4 = colors[b.getUint8(11)];
 
       console.log(
         "%s ",
@@ -118,19 +137,19 @@ function intelino(b) {
       console.log("COLOR_CHANGED", {
         ts,
         sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : "?",
-        color: colors[b.readUInt8(11)] ?? "?" + b.readUInt8(11),
-        dist: b.readUInt32BE(7),
+        color: colors[b.getUint8(11)] ?? "?" + b.getUint8(11),
+        dist: b.getUint32(7),
       });
     } else if (cmd === 0x0a) {
       console.log("SPLIT_DECISION", {
         ts,
-        decision: decisions[b.readUInt8(7)] ?? "?" + b.readUInt8(7),
-        dist: b.readUInt32BE(8),
+        decision: decisions[b.getUint8(7)] ?? "?" + b.getUint8(7),
+        dist: b.getUint32(8),
       });
     } else {
-      console.log(b.toString("hex").replace(/(..)/g, "$1 ").trim());
+      console.log("UNKNOWN", toHex(b));
     }
   } else {
-    console.log(b.toString("hex").replace(/(..)/g, "$1 ").trim());
+    console.log("UNKNOWN", toHex(b));
   }
 }

@@ -402,7 +402,7 @@ wss.on("connection", (ws) => {
         const b = changed.Value.value;
 
         if (isIntelino) {
-          intelino(b);
+          intelino(new DataView(b.buffer, b.byteOffset, b.byteLength));
         }
 
         send({
