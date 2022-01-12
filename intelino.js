@@ -78,35 +78,18 @@ function intelinoBufferToJson(b) {
         odoCm: b.getUint32(2),
       };
 
-    case 0xb7: {
-      const dir = directions[b.getUint8(2)];
-
-      const speed = b.getUint16(3);
-
-      const pwm = b.getUint8(5);
-
-      const speedControl = Boolean(b.getUint8(6));
-
-      const desiredSpeed = b.getUint16(7);
-
-      const pauseTime = b.getUint8(9);
-
-      const nextDecision = b.getUint8(10);
-
-      const odo = b.getUint32(14);
-
+    case 0xb7:
       return {
         type: "Movement",
-        dir,
-        speed,
-        desiredSpeed,
-        pwm,
-        speedControl,
-        pauseTime,
-        nextDecision: decisions[nextDecision] ?? "?" + nextDecision,
-        odo,
+        dir: directions[b.getUint8(2)],
+        speed: b.getUint16(3),
+        pwm: b.getUint8(5),
+        speedControl: Boolean(b.getUint8(6)),
+        desiredSpeed: b.getUint16(7),
+        pauseTime: b.getUint8(9),
+        nextDecision: decisions[b.getUint8(10)],
+        odo: b.getUint32(14),
       };
-    }
 
     case 0xe0: {
       const cmd = b.getUint8(2);
@@ -118,7 +101,7 @@ function intelinoBufferToJson(b) {
           return {
             type: "EventMovementDirectionChanged",
             ts,
-            direction: directions[b.getUint8(7)] ?? "?" + b.getUint8(7),
+            direction: directions[b.getUint8(7)],
           };
 
         case 0x02:
@@ -138,32 +121,23 @@ function intelinoBufferToJson(b) {
           return {
             type: "EventButtonPressDetected",
             ts,
-            pressDuration:
-              [undefined, "short", "long"][b.getUint8(7)] ??
-              "?" + b.getUint8(7),
+            pressDuration: [undefined, "short", "long"][b.getUint8(7)],
           };
 
         case 0x06:
-        case 0x09: {
-          const counter = b.getUint8(7);
-          const c1 = colors[b.getUint8(8)];
-          const c2 = colors[b.getUint8(9)];
-          const c3 = colors[b.getUint8(10)];
-          const c4 = colors[b.getUint8(11)];
-
+        case 0x09:
           return {
             type:
               cmd === 0x06
                 ? "EventSnapCommandExecuted"
                 : "EventSnapCommandDetected",
             ts,
-            counter,
-            c1,
-            c2,
-            c3,
-            c4,
+            counter: b.getUint8(7),
+            c1: colors[b.getUint8(8)],
+            c2: colors[b.getUint8(9)],
+            c3: colors[b.getUint8(10)],
+            c4: colors[b.getUint8(11)],
           };
-        }
 
         case 0x07:
         case 0x08:
@@ -171,7 +145,7 @@ function intelinoBufferToJson(b) {
             type: "EventColorChanged",
             ts,
             sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : "?",
-            color: colors[b.getUint8(11)] ?? "?" + b.getUint8(11),
+            color: colors[b.getUint8(11)],
             dist: b.getUint32(7),
           };
 
@@ -179,7 +153,7 @@ function intelinoBufferToJson(b) {
           return {
             type: "EventSplitDecision",
             ts,
-            decision: decisions[b.getUint8(7)] ?? "?" + b.getUint8(7),
+            decision: decisions[b.getUint8(7)],
             dist: b.getUint32(8),
           };
       }
