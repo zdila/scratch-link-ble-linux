@@ -1,548 +1,222 @@
 const { createServer } = require("https");
+
 const { readFileSync } = require("fs");
+
 const { WebSocketServer } = require("ws");
-const dbus = require("dbus-next");
-const { matchesFilter } = require("./filterMatcher");
+
+const { initBle } = require("./ble");
+
+const { Buffer } = require("buffer");
+
 const { intelinoBufferToJson } = require("./intelino");
 
-const GS1 = "org.bluez.GattService1";
+const { debug } = require("./debug");
 
-const GC1 = "org.bluez.GattCharacteristic1";
+initBle()
+  .then(({ createSession }) => {
+    const isIntelino = process.argv.includes("--intelino");
 
-const D1 = "org.bluez.Device1";
-
-const PROPS = "org.freedesktop.DBus.Properties";
-
-const debug = process.argv.includes("--debug");
-
-const isIntelino = process.argv.includes("--intelino");
-
-const Variant = dbus.Variant;
-
-const bus = dbus.systemBus();
-
-const server = createServer(
-  {
-    cert: readFileSync("scratch-device-manager.cer"),
-    key: readFileSync("scratch-device-manager.key"),
-  },
-  (req, res) => {
-    res.writeHead(200);
-    res.end("OK");
-  }
-);
-
-const wss = new WebSocketServer({ server });
-
-server.listen(20110);
-
-let discovering = false;
-
-let bluez;
-
-let hci0Obj;
-
-let adapterIface;
-
-let objectManagerIface;
-
-const deviceObjs = new Set();
-
-function dbg(...args) {
-  if (debug) {
-    console.log(...args);
-  }
-}
-
-wss.on("connection", (ws) => {
-  dbg("WebSocket connection");
-
-  let deviceObj = undefined;
-
-  const charMap = new Map();
-
-  const serviceMap = new Map();
-
-  let filters;
-
-  const connectCleanupTasks = [];
-
-  const closeCleanupTasks = [];
-
-  const send = (data) => {
-    dbg("RPC Sending:", data);
-
-    if (ws.readyState !== ws.OPEN) {
-      console.warn("Can't send, WeboSocket is not open");
-
-      return;
-    }
-
-    return ws.send(JSON.stringify({ jsonrpc: "2.0", ...data }), {}, (err) => {
-      if (err) {
-        console.error("Error sending data to WebSocket:", err);
+    const server = createServer(
+      {
+        cert: readFileSync("scratch-device-manager.cer"),
+        key: readFileSync("scratch-device-manager.key"),
+      },
+      (req, res) => {
+        res.writeHead(200);
+        res.end("OK");
       }
-    });
-  };
+    );
 
-  ws.on("message", (data) => {
-    const { id, method, params } = JSON.parse(data.toString("UTF-8"));
+    const wss = new WebSocketServer({ server });
 
-    dbg("RPC Received:", { id, method, params });
+    server.listen(20110);
 
-    const reply = (data) => {
-      return send({ id, ...data });
-    };
+    wss.on("connection", (ws) => {
+      debug("WebSocket connection");
 
-    const replyError = (err) => {
-      console.error(err);
+      const session = createSession();
 
-      return reply({ error: { code: -32603, message: String(err) } });
-    };
+      const send = (data) => {
+        debug("RPC Sending:", data);
 
-    switch (method) {
-      case "getVersion":
-        reply({ result: { protocol: "1.3" } });
+        if (ws.readyState !== ws.OPEN) {
+          console.warn("Can't send, WeboSocket is not open");
 
-        break;
-
-      case "discover":
-        filters = params.filters;
-
-        discover().catch((err) => {
-          console.error(err);
-        });
-
-        reply({ result: null });
-
-        break;
-
-      case "connect":
-        connect(params.peripheralId).then(
-          () => reply({ result: null }),
-          replyError
-        );
-
-        break;
-
-      case "write":
-        {
-          const msg =
-            params.encoding === "base64"
-              ? [...Buffer.from(params.message, "base64").values()]
-              : params.message;
-
-          write(
-            params.serviceId,
-            params.characteristicId,
-            msg,
-            params.withResponse
-          ).then(() => reply({ result: msg.length }), replyError);
+          return;
         }
 
-        break;
+        return ws.send(
+          JSON.stringify({ jsonrpc: "2.0", ...data }),
+          {},
+          (err) => {
+            if (err) {
+              console.error("Error sending data to WebSocket:", err);
+            }
+          }
+        );
+      };
 
-      case "read":
-        read(
-          params.serviceId,
-          params.characteristicId,
-          params.startNotifications
-        ).then(
-          (result) =>
+      ws.on("message", (data) => {
+        const { id, method, params } = JSON.parse(data.toString("UTF-8"));
+
+        debug("RPC Received:", { id, method, params });
+
+        const reply = (data) => {
+          return send({ id, ...data });
+        };
+
+        const replyError = (err) => {
+          console.error(err);
+
+          return reply({ error: { code: -32603, message: String(err) } });
+        };
+
+        switch (method) {
+          case "getVersion":
+            reply({ result: { protocol: "1.3" } });
+
+            break;
+
+          case "discover":
+            session
+              .discover(params.filters)
+              .then(() => reply({ result: null }), replyError);
+
+            break;
+
+          case "connect":
+            session
+              .connect(params.peripheralId)
+              .then(() => reply({ result: null }), replyError);
+
+            break;
+
+          case "write":
+            {
+              const msg =
+                params.encoding === "base64"
+                  ? [...Buffer.from(params.message, "base64").values()]
+                  : params.message;
+
+              session
+                .write(
+                  params.serviceId,
+                  params.characteristicId,
+                  msg,
+                  params.withResponse
+                )
+                .then(() => reply({ result: msg.length }), replyError);
+            }
+
+            break;
+
+          case "read":
+            session
+              .read(
+                params.serviceId,
+                params.characteristicId,
+                params.startNotifications
+              )
+              .then(
+                (result) =>
+                  reply({
+                    result: result.toString("base64"),
+                    encoding: "base64",
+                  }),
+                replyError
+              );
+
+            break;
+
+          case "startNotifications":
+            session
+              .startNotifications(params.serviceId, params.characteristicId)
+              .then(() => reply({ result: null }), replyError);
+
+            break;
+
+          case "stopNotifications":
+            session
+              .stopNotifications(params.serviceId, params.characteristicId)
+              .then(
+                () => reply({ result: null }),
+                (err) => reply({ error: String(err) })
+              );
+
+            break;
+
+          case "getServices":
+            reply({ result: session.getServices() });
+
+            break;
+
+          case "getCharacteristics": {
             reply({
-              result: Buffer.from(result).toString("base64"),
-              encoding: "base64",
-            }),
-          replyError
-        );
+              result: session.getCharacteristics(params.serviceId),
+            });
 
-        break;
+            break;
+          }
 
-      case "startNotifications":
-        startNotifications(params.serviceId, params.characteristicId).then(
-          () => reply({ result: null }),
-          replyError
-        );
+          default:
+            console.error("unknown method");
 
-        break;
+            reply({
+              error: {
+                code: -32601,
+                message: "Method not found",
+              },
+            });
 
-      case "stopNotifications":
-        stopNotifications(params.serviceId, params.characteristicId).then(
-          () => reply({ result: null }),
-          (err) => reply({ error: String(err) })
-        );
-
-        break;
-
-      case "getServices":
-        reply({ result: serviceMap.values().map((s) => s.uuid) });
-
-        break;
-
-      case "getCharacteristics": {
-        const s = serviceMap.values().find((s) => s.uuid === params.serviceId);
-
-        reply({
-          result: s
-            ? charMap
-                .values()
-                .filter((c) => c.path.startsWith(s.path))
-                .map((c) => c.uuid)
-            : [],
-        });
-
-        break;
-      }
-
-      default:
-        console.error("unknown method");
-
-        reply({
-          error: {
-            code: -32601,
-            message: "Method not found",
-          },
-        });
-
-        break;
-    }
-  });
-
-  ws.on("close", () => {
-    dbg("WebSocket connection closed");
-
-    for (const task of [...connectCleanupTasks, ...closeCleanupTasks]) {
-      task();
-    }
-
-    for (const fn of notifMap.values()) {
-      fn();
-    }
-
-    if (deviceObj) {
-      dbg("Disconnecting device");
-
-      const deviceIface = deviceObj.getInterface(D1);
-
-      deviceIface
-        .Disconnect()
-        .catch((err) => console.error("Error Disconnect:", err));
-
-      deviceObjs.delete(deviceObj);
-    }
-  });
-
-  async function discover() {
-    if (!discovering) {
-      dbg("Starting discovery");
-
-      await adapterIface.StartDiscovery();
-    }
-
-    const handle = (...params) => {
-      handleInterfaceAdded(...params).catch((err) => {
-        console.error(err);
+            break;
+        }
       });
-    };
 
-    objectManagerIface.on("InterfacesAdded", handle);
+      session.on("disconnected", () => {
+        ws.close();
+      });
 
-    connectCleanupTasks.push(() => {
-      objectManagerIface.off("InterfacesAdded", handle);
-    });
+      ws.on("close", () => {
+        debug("WebSocket connection closed");
 
-    for (const [path, props] of Object.entries(
-      await objectManagerIface.GetManagedObjects()
-    )) {
-      await handleInterfaceAdded(path, props);
-    }
-  }
+        session.close();
+      });
 
-  async function handleInterfaceAdded(path, props) {
-    const device = props?.[D1];
+      session.on("didDiscoverPeripheral", (params) => {
+        send({
+          method: "didDiscoverPeripheral",
+          params,
+        });
+      });
 
-    if (device && filters?.some((filter) => matchesFilter(device, filter))) {
-      const deviceObj = await bus.getProxyObject("org.bluez", path);
-
-      const propertiesIface = deviceObj.getInterface(PROPS);
-
-      const handleDevicePropsChanged = (iface, changed) => {
-        dbg("Device %s props changed:", iface, changed);
-
-        if (iface === D1 && changed.RSSI) {
-          // propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
+      session.on(
+        "characteristicDidChange",
+        ({ serviceId, characteristicId, message }) => {
+          if (isIntelino) {
+            console.log(
+              intelinoBufferToJson(
+                new DataView(
+                  message.buffer,
+                  message.byteOffset,
+                  message.byteLength
+                )
+              )
+            );
+          }
 
           send({
-            method: "didDiscoverPeripheral",
+            method: "characteristicDidChange",
             params: {
-              peripheralId: path,
-              name: device?.Name?.value,
-              rssi: changed.RSSI.value,
+              serviceId,
+              characteristicId,
+              message: message.toString("base64"),
+              encoding: "base64",
             },
           });
         }
-      };
-
-      propertiesIface.on("PropertiesChanged", handleDevicePropsChanged);
-
-      connectCleanupTasks.push(() => {
-        propertiesIface.off("PropertiesChanged", handleDevicePropsChanged);
-      });
-    }
-  }
-
-  async function connect(devicePath) {
-    if (discovering) {
-      dbg("Stopping discovery");
-
-      await adapterIface.StopDiscovery();
-    }
-
-    for (const task of connectCleanupTasks) {
-      task();
-    }
-
-    connectCleanupTasks.length = 0;
-
-    dbg("Connecting to device", devicePath);
-
-    deviceObj = await bus.getProxyObject("org.bluez", devicePath);
-
-    deviceObjs.add(deviceObj);
-
-    const propertiesIface = deviceObj.getInterface(PROPS);
-
-    const srPromise = new Promise((resolve) => {
-      const handlePropertiesChanges = (iface, changed) => {
-        if (iface === D1) {
-          if (changed.ServicesResolved) {
-            const { value } = changed.ServicesResolved;
-
-            dbg("ServicesResolved:", value);
-
-            resolve();
-          }
-
-          if (changed.Connected) {
-            const { value } = changed.Connected;
-
-            dbg("Connected:", value);
-
-            if (!value) {
-              ws.close();
-
-              deviceObj = undefined;
-            }
-          }
-        }
-      };
-
-      propertiesIface.on("PropertiesChanged", handlePropertiesChanges);
-
-      closeCleanupTasks.push(() => {
-        propertiesIface.off("PropertiesChanged", handlePropertiesChanges);
-      });
-    });
-
-    const deviceIface = deviceObj.getInterface(D1);
-
-    await deviceIface.Connect();
-
-    await srPromise;
-
-    for (const [path, props] of Object.entries(
-      await objectManagerIface.GetManagedObjects()
-    )) {
-      if (
-        path.startsWith(devicePath + "/service") &&
-        /\/char[0-9a-z]*$/.test(path)
-      ) {
-        const uuid = props[GC1].UUID.value;
-
-        dbg("Found GATT Characteristics", uuid);
-
-        const obj = await bus.getProxyObject("org.bluez", path);
-
-        const iface = obj.getInterface(GC1);
-
-        charMap.set(path, { uuid, path, iface, obj });
-      } else if (
-        path.startsWith(devicePath) &&
-        /\/service[0-9a-z]*$/.test(path)
-      ) {
-        const uuid = props[GS1].UUID.value;
-
-        dbg("Found GATT Service", uuid);
-
-        const isPrimary = props[GS1].Primary.value;
-
-        const obj = await bus.getProxyObject("org.bluez", path);
-
-        const iface = obj.getInterface(GS1);
-
-        serviceMap.set(path, { uuid, path, iface, obj, isPrimary });
-      }
-    }
-  }
-
-  // TODO optimize from O(n)
-  function getChar(serviceId, characteristicId) {
-    const service = [...serviceMap.values()].find(
-      serviceId ? (s) => s.uuid === serviceId : (s) => s.isPrimary
-    );
-
-    if (service) {
-      for (const char of [...charMap.values()]) {
-        if (
-          char.uuid === characteristicId &&
-          char.path.startsWith(service.path)
-        ) {
-          return char;
-        }
-      }
-    }
-
-    dbg("No such characteristic", serviceId, characteristicId);
-
-    throw new Error("no such characteristic");
-  }
-
-  async function write(serviceId, characteristicId, msg, withResponse) {
-    await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
-      type: new Variant("s", withResponse ? "request" : "command"),
-    });
-  }
-
-  const notifMap = new Map();
-
-  async function startNotifications(serviceId, characteristicId) {
-    const key = serviceId + ":" + characteristicId;
-
-    if (notifMap.has(key)) {
-      console.warn("Duplicate notification subscription request for ", key);
-
-      return;
-    }
-
-    const { iface, obj } = await getChar(serviceId, characteristicId);
-
-    await iface.StartNotify();
-
-    const propertiesIface = obj.getInterface(PROPS);
-
-    const handleNotif = (iface, changed) => {
-      if (iface === GC1 && changed.Value) {
-        const b = changed.Value.value;
-
-        if (isIntelino) {
-          console.log(
-            intelinoBufferToJson(
-              new DataView(b.buffer, b.byteOffset, b.byteLength)
-            )
-          );
-        }
-
-        send({
-          method: "characteristicDidChange",
-          params: {
-            serviceId,
-            characteristicId,
-            message: b.toString("base64"),
-            encoding: "base64",
-          },
-        });
-      }
-    };
-
-    propertiesIface.on("PropertiesChanged", handleNotif);
-
-    notifMap.set(key, async () => {
-      propertiesIface.off("PropertiesChanged", handleNotif);
-
-      await iface.StopNotify();
-    });
-  }
-
-  async function stopNotifications(serviceId, characteristicId) {
-    await notifMap.get(serviceId + ":" + characteristicId)?.();
-  }
-
-  async function read(serviceId, characteristicId, startNotif) {
-    const { iface } = await getChar(serviceId, characteristicId);
-
-    const result = iface.ReadValue({});
-
-    if (startNotif) {
-      await startNotifications(serviceId, characteristicId);
-    }
-
-    return result;
-  }
-});
-
-process.on("SIGINT", () => {
-  dbg("Caught interrupt signal");
-
-  const promises = [];
-
-  try {
-    if (discovering) {
-      dbg("Stopping discovery");
-
-      promises.push(
-        adapterIface.StopDiscovery().catch((err) => {
-          console.err("Error StopDiscovery:", err);
-        })
       );
-    }
-
-    for (const deviceObj of deviceObjs) {
-      dbg("Disconnecting");
-
-      const deviceIface = deviceObj.getInterface(D1);
-
-      promises.push(
-        deviceIface.Disconnect().catch((err) => {
-          console.err("Error Disconnect:", err);
-        })
-      );
-    }
-  } finally {
-    Promise.all(promises).finally(() => process.exit());
-  }
-});
-
-async function init() {
-  bluez = await bus.getProxyObject("org.bluez", "/");
-
-  hci0Obj = await bus.getProxyObject("org.bluez", "/org/bluez/hci0");
-
-  adapterIface = hci0Obj.getInterface("org.bluez.Adapter1");
-
-  const propertiesIface = hci0Obj.getInterface(PROPS);
-
-  objectManagerIface = bluez.getInterface("org.freedesktop.DBus.ObjectManager");
-
-  discovering = (await propertiesIface.Get("org.bluez.Adapter1", "Discovering"))
-    .value;
-
-  dbg("Discovering:", discovering);
-
-  propertiesIface.on("PropertiesChanged", (iface, changed) => {
-    dbg("Adapter %s props changed:", iface, changed);
-
-    if ((iface === "org.bluez.Adapter1", changed.Discovering)) {
-      discovering = changed.Discovering.value;
-
-      dbg("Discovering:", discovering);
-    }
+    });
+  })
+  .catch((err) => {
+    console.error(err);
   });
-
-  await adapterIface.SetDiscoveryFilter({
-    Transport: new Variant("s", "le"),
-  });
-}
-
-init().catch((err) => {
-  console.error(err);
-});
