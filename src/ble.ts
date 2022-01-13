@@ -41,6 +41,8 @@ type DidDiscoverPeripheralParams = {
   rssi: number;
 };
 
+export type Session = ReturnType<typeof createSession>;
+
 function createSession() {
   const eventListeners = new Map<EventName, Set<(params: any) => void>>();
 
@@ -352,7 +354,7 @@ function createSession() {
     msg: Buffer,
     withResponse: boolean
   ) {
-    getChar(serviceId, characteristicId).iface.WriteValue(msg, {
+    await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
       type: new Variant("s", withResponse ? "request" : "command"),
     });
   }
@@ -410,7 +412,7 @@ function createSession() {
   ) {
     const { iface } = getChar(serviceId, characteristicId);
 
-    const result = iface.ReadValue({});
+    const result = await iface.ReadValue({});
 
     if (startNotif) {
       await startNotifications(serviceId, characteristicId);
