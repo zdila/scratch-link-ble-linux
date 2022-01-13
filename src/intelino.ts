@@ -1,4 +1,10 @@
-const directions = ["current", "forward", "backward", "stop", "invert"];
+export const directions = [
+  "current",
+  "forward",
+  "backward",
+  "stop",
+  "invert",
+] as const;
 
 const colors = [
   "black",

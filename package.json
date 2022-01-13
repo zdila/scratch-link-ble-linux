@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node src",
-    "debug": "ts-node src --debug"
+    "debug": "ts-node src --debug",
+    "intelino": "ts-node src/int.ts --debug"
   },
   "keywords": [],
   "author": "",
