@@ -31,6 +31,10 @@ async function startSession(session: Session) {
     );
   }
 
+  async function setTopLedColor(r: number, g: number, b: number) {
+    await sendCommand(0xb1, 1, r, g, b);
+  }
+
   async function driveWithConstantPwm(
     pwm: number,
     direction: typeof directions[number] = "forward",
