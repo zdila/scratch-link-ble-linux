@@ -1,7 +1,13 @@
 import { initBle, Session } from "./ble";
-import { directions, intelinoBufferToJson } from "./intelino";
-
-const feedbackTypes = { none: 0, movementStop: 1, endRoute: 2 };
+import {
+  Color,
+  colors,
+  Direction,
+  directions,
+  FeedbackType,
+  feedbackTypes,
+  intelinoBufferToJson,
+} from "./intelino";
 
 initBle()
   .then(({ createSession }) => startSession(createSession()))
@@ -9,19 +15,7 @@ initBle()
     console.error(err);
   });
 
-async function startSession(session: Session) {
-  const connPromise = new Promise((resolve, reject) => {
-    session.on("didDiscoverPeripheral", (dev) => {
-      session.connect(dev.peripheralId).then(resolve, reject);
-    });
-  });
-
-  await session.discover([{ namePrefix: "intelino" }]);
-
-  await connPromise;
-
-  console.log("Conencted");
-
+function getCommands(session: Session) {
   async function sendCommand(command: number, ...bytes: number[]) {
     await session.write(
       "43dfd9e9-17e5-4860-803d-9df8999b0d7a",
@@ -31,13 +25,18 @@ async function startSession(session: Session) {
     );
   }
 
+  async function startStreaming() {
+    // TODO params
+    await sendCommand(0xb7, 0x07, 0x0a);
+  }
+
   async function setTopLedColor(r: number, g: number, b: number) {
     await sendCommand(0xb1, 1, r, g, b);
   }
 
   async function driveWithConstantPwm(
     pwm: number,
-    direction: typeof directions[number] = "forward",
+    direction: Direction = "forward",
     playFeedback: boolean
   ) {
     await sendCommand(
@@ -52,26 +51,60 @@ async function startSession(session: Session) {
     await sendCommand(0xbe, duration, Number(playFeedback));
   }
 
-  async function stopDriving(
-    feedbackType: keyof typeof feedbackTypes = "movementStop"
-  ) {
-    await sendCommand(0xb9, feedbackTypes[feedbackType]);
+  async function stopDriving(feedbackType: FeedbackType) {
+    await sendCommand(0xb9, feedbackTypes.indexOf(feedbackType));
   }
 
-  // start streaming; TODO
-  await sendCommand(0xb7, 0x07, 0x0a);
+  async function setSnapCommandExecution(on: boolean) {
+    await sendCommand(0x41, Number(on));
+  }
 
-  // also read it (should be 00)
-  await session.startNotifications(
-    "4dad4922-5c86-4ba7-a2e1-0f240537bd08",
-    "a4b80869-a84c-4160-a3e0-72fa58ff480e"
-  );
+  async function decoupleWagon(playFeedback: boolean, durationMs = 512) {
+    await sendCommand(
+      0x80,
+      durationMs >> 8,
+      durationMs & 0xff,
+      Number(playFeedback)
+    );
+  }
 
-  // get version
-  await sendCommand(0x07);
+  async function clearCustomSnapCommands() {
+    const clrs: Color[] = ["black", "red", "green", "yellow", "blue"];
 
-  // snap execution on
-  await sendCommand(0x41, 0x01);
+    for (const color of clrs) {
+      await sendCommand(0x64, colors.indexOf(color), 0x00);
+    }
+  }
+
+  async function setSnapCommandFeedback(sound: boolean, lights: boolean) {
+    await sendCommand(0x65, Number(sound) | (Number(lights) << 1));
+  }
+
+  return {
+    startStreaming,
+    setTopLedColor,
+    driveWithConstantPwm,
+    pauseDriving,
+    stopDriving,
+    setSnapCommandExecution,
+    decoupleWagon,
+    clearCustomSnapCommands,
+    setSnapCommandFeedback,
+  };
+}
+
+async function startSession(session: Session) {
+  const connPromise = new Promise((resolve, reject) => {
+    session.on("didDiscoverPeripheral", (dev) => {
+      session.connect(dev.peripheralId).then(resolve, reject);
+    });
+  });
+
+  await session.discover([{ namePrefix: "intelino" }]);
+
+  await connPromise;
+
+  console.log("Conencted");
 
   session.on("characteristicDidChange", (value) => {
     console.log(
@@ -84,6 +117,19 @@ async function startSession(session: Session) {
       )
     );
   });
+
+  ////////////////////////////////////////////////////
+
+  // also read it (should be 00)
+  await session.startNotifications(
+    "4dad4922-5c86-4ba7-a2e1-0f240537bd08",
+    "a4b80869-a84c-4160-a3e0-72fa58ff480e"
+  );
+
+  const { setTopLedColor } = getCommands(session);
+
+  // // get version
+  // await sendCommand(0x07);
 
   await setTopLedColor(255, 0, 255);
 

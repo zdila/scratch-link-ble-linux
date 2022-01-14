@@ -6,7 +6,9 @@ export const directions = [
   "invert",
 ] as const;
 
-const colors = [
+export type Direction = typeof directions[number];
+
+export const colors = [
   "black",
   "red",
   "green",
@@ -16,7 +18,9 @@ const colors = [
   "cyan",
   "white",
   "unknown",
-];
+] as const;
+
+export type Color = typeof colors[number];
 
 const decisions = [
   "none",
@@ -27,7 +31,13 @@ const decisions = [
   undefined,
   undefined,
   "all",
-];
+] as const;
+
+export type Decision = typeof decisions[number];
+
+export const feedbackTypes = ["none", "movementStop", "endRoute"] as const;
+
+export type FeedbackType = typeof feedbackTypes[number];
 
 function toHex(dv: DataView, separator = " ", offset = 0) {
   return [
