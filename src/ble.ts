@@ -1,5 +1,6 @@
 import dbus, { Variant } from "dbus-next";
 import { debug } from "./debug";
+import { createEventTarget } from "./eventTarget";
 import { Device, Filter, matchesFilter } from "./filterMatcher";
 
 const GS1 = "org.bluez.GattService1";
@@ -24,18 +25,15 @@ let objectManagerIface: dbus.ClientInterface;
 
 const deviceObjs = new Set<dbus.ProxyObject>();
 
-type EventName =
-  | "disconnected"
-  | "didDiscoverPeripheral"
-  | "characteristicDidChange";
+type EventName = "disconnected" | "discover" | "characteristicDidChange";
 
-type CharacteristicDidChangeParams = {
+type CharacteristicChangeParams = {
   serviceId: string | null;
   characteristicId: string;
   message: Buffer;
 };
 
-type DidDiscoverPeripheralParams = {
+export type DiscoverParams = {
   peripheralId: string;
   name?: string;
   rssi: number;
@@ -44,57 +42,11 @@ type DidDiscoverPeripheralParams = {
 export type Session = ReturnType<typeof createSession>;
 
 function createSession() {
-  const eventListeners = new Map<EventName, Set<(params: any) => void>>();
-
-  function on(type: "disconnected", callback: () => void): void;
-
-  function on(
-    type: "didDiscoverPeripheral",
-    callback: (params: DidDiscoverPeripheralParams) => void
-  ): void;
-
-  function on(
-    type: "characteristicDidChange",
-    callback: (params: CharacteristicDidChangeParams) => void
-  ): void;
-
-  function on(type: EventName, callback: (params?: any) => void): void {
-    let s = eventListeners.get(type);
-
-    if (!s) {
-      s = new Set();
-
-      eventListeners.set(type, s);
-    }
-
-    s.add(callback);
-
-    // return () => {
-    //   off(type, callback);
-    // };
-  }
-
-  function off(type: EventName, callback: () => void) {
-    eventListeners.get(type)?.delete(callback);
-  }
-
-  function fire(type: "disconnected"): void;
-
-  function fire(
-    type: "characteristicDidChange",
-    params: CharacteristicDidChangeParams
-  ): void;
-
-  function fire(
-    type: "didDiscoverPeripheral",
-    params: DidDiscoverPeripheralParams
-  ): void;
-
-  function fire(type: EventName, params?: any) {
-    for (const callback of eventListeners.get(type) ?? []) {
-      callback(params);
-    }
-  }
+  const { fire, on, off } = createEventTarget<{
+    disconnect: void;
+    discover: DiscoverParams;
+    characteristicChange: CharacteristicChangeParams;
+  }>();
 
   let deviceObj: dbus.ProxyObject | undefined;
 
@@ -155,6 +107,8 @@ function createSession() {
 
       deviceObjs.delete(deviceObj);
     }
+
+    // bus.disconnect();
   }
 
   async function discover(filtersParam: Filter[]) {
@@ -206,7 +160,7 @@ function createSession() {
         debug("Device %s props changed:", iface, changed);
 
         if (iface === D1 && changed.RSSI) {
-          fire("didDiscoverPeripheral", {
+          fire("discover", {
             peripheralId: path,
             name: device?.Name?.value,
             rssi:
@@ -268,7 +222,7 @@ function createSession() {
             debug("Connected:", value);
 
             if (!value) {
-              fire("disconnected");
+              fire("disconnect", undefined);
 
               deviceObj = undefined;
             }
@@ -359,7 +313,7 @@ function createSession() {
     });
   }
 
-  const notifMap = new Map();
+  const notifMap = new Map<string, () => void>();
 
   async function startNotifications(
     serviceId: string | null,
@@ -381,7 +335,7 @@ function createSession() {
 
     const handleNotif = (iface: string, changed: Record<string, unknown>) => {
       if (iface === GC1 && changed.Value instanceof Variant) {
-        fire("characteristicDidChange", {
+        fire("characteristicChange", {
           serviceId,
           characteristicId,
           message: changed.Value.value,

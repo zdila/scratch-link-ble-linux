@@ -1,12 +1,19 @@
-import { initBle, Session } from "./ble";
+import { DiscoverParams, initBle, Session } from "./ble";
+import { createEventTarget } from "./eventTarget";
 import {
   Color,
   colors,
+  Decision,
   Direction,
   directions,
   FeedbackType,
   feedbackTypes,
   intelinoBufferToJson,
+  MacAddressMessage,
+  Message,
+  StatsLifetimeOdometerMessage,
+  TrainUuidMessage,
+  VersionDetailMessage,
 } from "./intelino";
 
 initBle()
@@ -15,7 +22,47 @@ initBle()
     console.error(err);
   });
 
-function getCommands(session: Session) {
+async function toIntelinoSession(session: Session) {
+  const callMap = new Map<number, (res: any) => void>();
+
+  const { on, off, fire } = createEventTarget<{
+    disconnect: void;
+    discover: DiscoverParams;
+    message: Message;
+  }>();
+
+  session.on("disconnect", () => {
+    fire("disconnect", undefined);
+  });
+
+  session.on("discover", (params) => {
+    fire("discover", params);
+  });
+
+  session.on("characteristicChange", (value) => {
+    const { message } = value;
+
+    const im = intelinoBufferToJson(
+      new DataView(message.buffer, message.byteOffset, message.byteLength)
+    );
+
+    const b0 = message.readUInt8(0);
+
+    const resolve = callMap.get(b0);
+    if (resolve) {
+      callMap.delete(b0);
+
+      resolve(im);
+    }
+
+    fire("message", im);
+  });
+
+  await session.startNotifications(
+    "4dad4922-5c86-4ba7-a2e1-0f240537bd08",
+    "a4b80869-a84c-4160-a3e0-72fa58ff480e"
+  );
+
   async function sendCommand(command: number, ...bytes: number[]) {
     await session.write(
       "43dfd9e9-17e5-4860-803d-9df8999b0d7a",
@@ -23,6 +70,38 @@ function getCommands(session: Session) {
       Buffer.from([command, bytes.length, ...bytes]),
       true
     );
+  }
+
+  async function sendCommandWithResponse<T extends Message>(
+    command: number,
+    ...bytes: number[]
+  ) {
+    return new Promise<T>((resolve, reject) => {
+      callMap.set(command, resolve);
+
+      sendCommand(command, ...bytes).then(() => {
+        setTimeout(() => {
+          callMap.delete(command);
+          reject(new Error("timeout"));
+        }, 3000);
+      }, reject);
+    });
+  }
+
+  async function getVersionInfo() {
+    return sendCommandWithResponse<VersionDetailMessage>(0x07);
+  }
+
+  async function getMacAddress() {
+    return sendCommandWithResponse<MacAddressMessage>(0x42);
+  }
+
+  async function getUuid() {
+    return sendCommandWithResponse<TrainUuidMessage>(0x43);
+  }
+
+  async function getStatsLifetimeOdometer() {
+    return sendCommandWithResponse<StatsLifetimeOdometerMessage>(0x3e);
   }
 
   async function startStreaming() {
@@ -43,6 +122,19 @@ function getCommands(session: Session) {
       0xbc,
       directions.indexOf(direction),
       0xff - (pwm & 0xff),
+      Number(playFeedback)
+    );
+  }
+
+  async function driveAtSpeedLevel(
+    speedLevel: 0 | 1 | 2 | 3,
+    direction: Direction = "forward",
+    playFeedback: boolean
+  ) {
+    await sendCommand(
+      0xb8,
+      directions.indexOf(direction),
+      speedLevel,
       Number(playFeedback)
     );
   }
@@ -80,6 +172,27 @@ function getCommands(session: Session) {
     await sendCommand(0x65, Number(sound) | (Number(lights) << 1));
   }
 
+  async function setHeadlightColor(
+    front: [r: number, g: number, b: number] | null | undefined,
+    back: [r: number, g: number, b: number] | null | undefined
+  ) {
+    sendCommand(
+      0xb4,
+      (front ? 0b010 : 0) | (back ? 0b100 : 0),
+      ...(front ?? [0, 0, 0]),
+      ...(back ?? [0, 0, 0])
+    );
+  }
+
+  async function setNextSplitSteeringDecision(
+    nextDecision: "left" | "right" | "straight"
+  ) {
+    sendCommand(
+      0xbf,
+      nextDecision === "left" ? 0b01 : nextDecision === "right" ? 0b10 : 0b11
+    );
+  }
+
   return {
     startStreaming,
     setTopLedColor,
@@ -90,12 +203,21 @@ function getCommands(session: Session) {
     decoupleWagon,
     clearCustomSnapCommands,
     setSnapCommandFeedback,
+    driveAtSpeedLevel,
+    setHeadlightColor,
+    setNextSplitSteeringDecision,
+    getVersionInfo,
+    getMacAddress,
+    getUuid,
+    getStatsLifetimeOdometer,
+    on,
+    off,
   };
 }
 
 async function startSession(session: Session) {
   const connPromise = new Promise((resolve, reject) => {
-    session.on("didDiscoverPeripheral", (dev) => {
+    session.on("discover", (dev) => {
       session.connect(dev.peripheralId).then(resolve, reject);
     });
   });
@@ -104,34 +226,31 @@ async function startSession(session: Session) {
 
   await connPromise;
 
-  console.log("Conencted");
-
-  session.on("characteristicDidChange", (value) => {
-    console.log(
-      intelinoBufferToJson(
-        new DataView(
-          value.message.buffer,
-          value.message.byteOffset,
-          value.message.byteLength
-        )
-      )
-    );
-  });
+  console.log("Connected");
 
   ////////////////////////////////////////////////////
 
-  // also read it (should be 00)
-  await session.startNotifications(
-    "4dad4922-5c86-4ba7-a2e1-0f240537bd08",
-    "a4b80869-a84c-4160-a3e0-72fa58ff480e"
-  );
+  const {
+    setTopLedColor,
+    getVersionInfo,
+    on,
+    getStatsLifetimeOdometer,
+    getMacAddress,
+    getUuid,
+  } = await toIntelinoSession(session);
 
-  const { setTopLedColor } = getCommands(session);
-
-  // // get version
-  // await sendCommand(0x07);
+  on("message", (m) => {
+    // console.log("MMMMM", m);
+  });
 
   await setTopLedColor(255, 0, 255);
+
+  console.log("BBBBBB", await getVersionInfo());
+  console.log("BBBBBB", await getMacAddress());
+  console.log("BBBBBB", await getUuid());
+  console.log("BBBBBB", await getStatsLifetimeOdometer());
+
+  await session.close();
 
   // await pauseDriving(10, true);
 }

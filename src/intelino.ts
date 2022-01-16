@@ -33,9 +33,9 @@ const decisions = [
   "all",
 ] as const;
 
-export type Decision = typeof decisions[number];
+export type Decision = NonNullable<typeof decisions[number]>;
 
-export const feedbackTypes = ["none", "movementStop", "endRoute"] as const;
+export const feedbackTypes = ["none", "movementStop", "endRoute"];
 
 export type FeedbackType = typeof feedbackTypes[number];
 
@@ -51,7 +51,117 @@ function toHex(dv: DataView, separator = " ", offset = 0) {
     .join(separator);
 }
 
-export function intelinoBufferToJson(b: DataView) {
+export type VersionDetailMessage = {
+  type: "VersionDetail";
+  api: [number, number];
+  firmware: [number, number, number];
+};
+
+export type MacAddressMessage = {
+  type: "MacAddress";
+  mac: string;
+};
+
+export type TrainUuidMessage = {
+  type: "TrainUuid";
+  uuid: string;
+};
+
+export type EventSnapCommandExecutedMessage = {
+  type: "EventSnapCommandExecuted";
+  counter: number;
+  c1: Color | undefined;
+  c2: Color | undefined;
+  c3: Color | undefined;
+  c4: Color | undefined;
+};
+
+export type EventSnapCommandDetectedMessage = {
+  type: "EventSnapCommandDetected";
+  counter: number;
+  c1: Color | undefined;
+  c2: Color | undefined;
+  c3: Color | undefined;
+  c4: Color | undefined;
+};
+
+export type StatsLifetimeOdometerMessage = {
+  type: "StatsLifetimeOdometer";
+  odoCm: number;
+};
+
+export type MovementMessage = {
+  type: "Movement";
+  dir: Direction | undefined;
+  speed: number;
+  pwm: number;
+  speedControl: boolean;
+  desiredSpeed: number;
+  pauseTime: number;
+  nextDecision: Decision | undefined;
+  odo: number;
+};
+
+export type EventMovementDirectionChangedMessage = {
+  type: "EventMovementDirectionChanged";
+  ts: number;
+  direction: Direction | undefined;
+};
+
+export type EventLowBatteryMessage = { type: "EventLowBattery"; ts: number };
+
+export type EventLowBatteryCutOffMessage = {
+  type: "EventLowBatteryCutOff";
+  ts: number;
+};
+
+export type EventChargingStateChangedMessage = {
+  type: "EventChargingStateChanged";
+  ts: number;
+  charging: boolean;
+};
+
+export type EventButtonPressDetectedMessage = {
+  type: "EventButtonPressDetected";
+  ts: number;
+  pressDuration: undefined | "short" | "long";
+};
+
+export type EventColorChangedMessage = {
+  type: "EventColorChanged";
+  ts: number;
+  sensor: "front" | "rear" | undefined;
+  color: Color | undefined;
+  dist: number;
+};
+
+export type EventSplitDecisionMessage = {
+  type: "EventSplitDecision";
+  ts: number;
+  decision: Decision | undefined;
+  dist: number;
+};
+
+export type UnknownMessage = { type: "Unknown"; payload: string };
+
+export type Message =
+  | VersionDetailMessage
+  | MacAddressMessage
+  | TrainUuidMessage
+  | EventSnapCommandExecutedMessage
+  | EventSnapCommandDetectedMessage
+  | StatsLifetimeOdometerMessage
+  | MovementMessage
+  | EventMovementDirectionChangedMessage
+  | EventLowBatteryMessage
+  | EventLowBatteryCutOffMessage
+  | EventChargingStateChangedMessage
+  | EventButtonPressDetectedMessage
+  | EventColorChangedMessage
+  | EventSplitDecisionMessage
+  | UnknownMessage;
+
+export function intelinoBufferToJson(b: DataView): Message {
   const mt = b.getUint8(0);
 
   switch (mt) {
@@ -124,7 +234,9 @@ export function intelinoBufferToJson(b: DataView) {
           return {
             type: "EventButtonPressDetected",
             ts,
-            pressDuration: [undefined, "short", "long"][b.getUint8(7)],
+            pressDuration: ([undefined, "short", "long"] as const)[
+              b.getUint8(7)
+            ],
           };
 
         case 0x06:
@@ -147,7 +259,7 @@ export function intelinoBufferToJson(b: DataView) {
           return {
             type: "EventColorChanged",
             ts,
-            sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : "?",
+            sensor: cmd === 0x07 ? "front" : cmd === 0x08 ? "rear" : undefined,
             color: colors[b.getUint8(11)],
             dist: b.getUint32(7),
           };

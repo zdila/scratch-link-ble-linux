@@ -166,7 +166,7 @@ initBle()
         }
       });
 
-      session.on("disconnected", () => {
+      session.on("disconnect", () => {
         ws.close();
       });
 
@@ -176,7 +176,7 @@ initBle()
         session.close();
       });
 
-      session.on("didDiscoverPeripheral", (params) => {
+      session.on("discover", (params) => {
         send({
           method: "didDiscoverPeripheral",
           params,
@@ -184,7 +184,7 @@ initBle()
       });
 
       session.on(
-        "characteristicDidChange",
+        "characteristicChange",
         ({ serviceId, characteristicId, message }) => {
           if (isIntelino) {
             console.log(
