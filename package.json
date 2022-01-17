@@ -6,7 +6,7 @@
   "scripts": {
     "start": "ts-node src",
     "debug": "ts-node src --debug",
-    "intelino": "ts-node src/int.ts --debug"
+    "intelino": "ts-node src/intelino-example.ts"
   },
   "keywords": [],
   "author": "",

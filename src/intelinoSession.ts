@@ -3,7 +3,6 @@ import { createEventTarget } from "./eventTarget";
 import {
   Color,
   colors,
-  Decision,
   Direction,
   directions,
   FeedbackType,
@@ -16,13 +15,7 @@ import {
   VersionDetailMessage,
 } from "./intelino";
 
-initBle()
-  .then(({ createSession }) => startSession(createSession()))
-  .catch((err) => {
-    console.error(err);
-  });
-
-async function toIntelinoSession(session: Session) {
+export async function toIntelinoSession(session: Session) {
   const callMap = new Map<number, (res: any) => void>();
 
   const { on, off, fire } = createEventTarget<{
@@ -129,7 +122,7 @@ async function toIntelinoSession(session: Session) {
   async function driveAtSpeedLevel(
     speedLevel: 0 | 1 | 2 | 3,
     direction: Direction = "forward",
-    playFeedback: boolean
+    playFeedback = true
   ) {
     await sendCommand(
       0xb8,
@@ -143,7 +136,7 @@ async function toIntelinoSession(session: Session) {
     await sendCommand(0xbe, duration, Number(playFeedback));
   }
 
-  async function stopDriving(feedbackType: FeedbackType) {
+  async function stopDriving(feedbackType: FeedbackType = "none") {
     await sendCommand(0xb9, feedbackTypes.indexOf(feedbackType));
   }
 
@@ -213,44 +206,4 @@ async function toIntelinoSession(session: Session) {
     on,
     off,
   };
-}
-
-async function startSession(session: Session) {
-  const connPromise = new Promise((resolve, reject) => {
-    session.on("discover", (dev) => {
-      session.connect(dev.peripheralId).then(resolve, reject);
-    });
-  });
-
-  await session.discover([{ namePrefix: "intelino" }]);
-
-  await connPromise;
-
-  console.log("Connected");
-
-  ////////////////////////////////////////////////////
-
-  const {
-    setTopLedColor,
-    getVersionInfo,
-    on,
-    getStatsLifetimeOdometer,
-    getMacAddress,
-    getUuid,
-  } = await toIntelinoSession(session);
-
-  on("message", (m) => {
-    // console.log("MMMMM", m);
-  });
-
-  await setTopLedColor(255, 0, 255);
-
-  console.log("BBBBBB", await getVersionInfo());
-  console.log("BBBBBB", await getMacAddress());
-  console.log("BBBBBB", await getUuid());
-  console.log("BBBBBB", await getStatsLifetimeOdometer());
-
-  await session.close();
-
-  // await pauseDriving(10, true);
 }

@@ -11,13 +11,9 @@ const D1 = "org.bluez.Device1";
 
 const PROPS = "org.freedesktop.DBus.Properties";
 
-const bus = dbus.systemBus();
+let bus: dbus.MessageBus;
 
 let discovering = false;
-
-let bluez: dbus.ProxyObject;
-
-let hci0Obj: dbus.ProxyObject;
 
 let adapterIface: dbus.ClientInterface;
 
@@ -391,13 +387,16 @@ function createSession() {
 }
 
 export async function initBle() {
-  if (bluez) {
+  if (bus) {
     throw new Error("already initialized");
   }
 
-  bluez = await bus.getProxyObject("org.bluez", "/");
+  bus = dbus.systemBus();
 
-  hci0Obj = await bus.getProxyObject("org.bluez", "/org/bluez/hci0");
+  const [bluez, hci0Obj] = await Promise.all([
+    bus.getProxyObject("org.bluez", "/"),
+    bus.getProxyObject("org.bluez", "/org/bluez/hci0"),
+  ]);
 
   adapterIface = hci0Obj.getInterface("org.bluez.Adapter1");
 
@@ -433,6 +432,10 @@ export async function initBle() {
   process.on("SIGINT", () => {
     debug("Caught interrupt signal");
 
+    close();
+  });
+
+  function close() {
     const promises = [];
 
     try {
@@ -460,7 +463,9 @@ export async function initBle() {
     } finally {
       Promise.all(promises).finally(() => process.exit());
     }
-  });
 
-  return { createSession };
+    bus?.disconnect();
+  }
+
+  return { createSession, close };
 }

@@ -35,7 +35,7 @@ const decisions = [
 
 export type Decision = NonNullable<typeof decisions[number]>;
 
-export const feedbackTypes = ["none", "movementStop", "endRoute"];
+export const feedbackTypes = ["none", "movementStop", "endRoute"] as const;
 
 export type FeedbackType = typeof feedbackTypes[number];
 
