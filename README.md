@@ -1,8 +1,10 @@
-# Scratch Link for BLE devices under Linux
+# Scratch Link for BLE devices under Linux + Intelino library
 
 This is Scratch Link for BLE devices under Linux. For BLE it uses D-Bus.
 
-So far has been tested only with Intelino smart train.
+It also features Intelino smart train library which is planned to be separated to different project.
+
+Scratch link has been so far has been only with Intelino smart train.
 
 ## Installation
 
@@ -18,3 +20,7 @@ So far has been tested only with Intelino smart train.
 1. for Intelino smart train
    - run as `npm start -- --intelino` to print interpreted messages coming from Intelino smart train
    - visit https://scratch.intelino.com/ and have a fun!
+
+### Intelino library
+
+You can find simple usage example in [intelino-example.ts](./src/intelino-example.ts).
