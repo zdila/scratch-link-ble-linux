@@ -43,7 +43,11 @@ async function startSession(session: Session) {
     if (m.type === "EventSplitDecision") {
       console.log(m);
     } else if (m.type === "EventColorChanged" && m.color === "magenta") {
+      console.log("Stopping");
+
       stopDriving("endRoute").finally(() => {
+        console.log("Closing");
+
         session.close();
       });
     }
