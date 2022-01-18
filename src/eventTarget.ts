@@ -27,7 +27,9 @@ export function createEventTarget<T extends { [key: string]: any }>() {
       try {
         callback(params);
       } catch (err) {
-        console.error("Error handling event " + type, err);
+        process.nextTick(() => {
+          throw err;
+        });
       }
     }
   }
