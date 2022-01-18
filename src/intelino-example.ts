@@ -40,16 +40,23 @@ async function startSession(session: Session) {
   } = await toIntelinoSession(session);
 
   on("message", (m) => {
-    if (m.type === "EventSplitDecision") {
-      console.log(m);
-    } else if (m.type === "EventColorChanged" && m.color === "magenta") {
-      console.log("Stopping");
+    switch (m.type) {
+      case "EventSplitDecision":
+        console.log(m);
 
-      stopDriving("endRoute").finally(() => {
-        console.log("Closing");
+        break;
+      case "EventColorChanged":
+        if (m.color === "magenta") {
+          console.log("Stopping");
 
-        session.close();
-      });
+          stopDriving("endRoute").finally(() => {
+            console.log("Closing");
+
+            session.close();
+          });
+        }
+
+        break;
     }
   });
 
