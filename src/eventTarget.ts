@@ -24,7 +24,11 @@ export function createEventTarget<T extends { [key: string]: any }>() {
 
   function fire<P extends keyof T>(type: P, params: T[P]) {
     for (const callback of eventListeners[type] ?? []) {
-      callback(params);
+      try {
+        callback(params);
+      } catch (err) {
+        console.error("Error handling event " + type, err);
+      }
     }
   }
 

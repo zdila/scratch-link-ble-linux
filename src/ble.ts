@@ -22,8 +22,6 @@ let objectManagerIface: dbus.ClientInterface;
 
 const deviceObjs = new Set<dbus.ProxyObject>();
 
-type EventName = "disconnected" | "discover" | "characteristicDidChange";
-
 const btLock = createLock();
 
 type CharacteristicChangeParams = {
