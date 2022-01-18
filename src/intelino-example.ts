@@ -2,12 +2,12 @@ import { initBle, Session } from "./ble";
 import { toIntelinoSession } from "./intelinoSession";
 
 initBle()
-  .then(({ createSession, close }) => startSession(createSession(), close))
+  .then(({ createSession }) => startSession(createSession()))
   .catch((err) => {
     console.error(err);
   });
 
-async function startSession(session: Session, close: () => void) {
+async function startSession(session: Session) {
   console.log("Scanning");
 
   const connPromise = new Promise((resolve, reject) => {
@@ -16,6 +16,10 @@ async function startSession(session: Session, close: () => void) {
 
       session.connect(dev.peripheralId).then(resolve, reject);
     });
+  });
+
+  session.on("disconnect", () => {
+    process.exit();
   });
 
   await session.discover([{ namePrefix: "intelino" }]);
@@ -40,7 +44,7 @@ async function startSession(session: Session, close: () => void) {
       console.log(m);
     } else if (m.type === "EventColorChanged" && m.color === "magenta") {
       stopDriving("endRoute").finally(() => {
-        close();
+        session.close();
       });
     }
   });

@@ -2,6 +2,7 @@ import dbus, { Variant } from "dbus-next";
 import { debug } from "./debug";
 import { createEventTarget } from "./eventTarget";
 import { Device, Filter, matchesFilter } from "./filterMatcher";
+import { createLock } from "./lock";
 
 const GS1 = "org.bluez.GattService1";
 
@@ -22,6 +23,8 @@ let objectManagerIface: dbus.ClientInterface;
 const deviceObjs = new Set<dbus.ProxyObject>();
 
 type EventName = "disconnected" | "discover" | "characteristicDidChange";
+
+const btLock = createLock();
 
 type CharacteristicChangeParams = {
   serviceId: string | null;
@@ -102,9 +105,12 @@ function createSession() {
       await deviceIface.Disconnect();
 
       deviceObjs.delete(deviceObj);
-    }
 
-    // bus.disconnect();
+      // it is not fired in this case automatically
+      fire("disconnect", undefined);
+
+      debug("Disconnected");
+    }
   }
 
   async function discover(filtersParam: Filter[]) {
@@ -304,12 +310,18 @@ function createSession() {
     msg: Buffer,
     withResponse: boolean
   ) {
-    await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
-      type: new Variant("s", withResponse ? "request" : "command"),
-    });
+    await btLock.lock();
+
+    try {
+      await getChar(serviceId, characteristicId).iface.WriteValue(msg, {
+        type: new Variant("s", withResponse ? "request" : "command"),
+      });
+    } finally {
+      btLock.unlock();
+    }
   }
 
-  const notifMap = new Map<string, () => void>();
+  const notifMap = new Map<string, () => Promise<void>>();
 
   async function startNotifications(
     serviceId: string | null,
@@ -325,7 +337,13 @@ function createSession() {
 
     const { iface, obj } = getChar(serviceId, characteristicId);
 
-    await iface.StartNotify();
+    await btLock.lock();
+
+    try {
+      await iface.StartNotify();
+    } finally {
+      btLock.unlock();
+    }
 
     const propertiesIface = obj.getInterface(PROPS);
 
@@ -362,13 +380,19 @@ function createSession() {
   ) {
     const { iface } = getChar(serviceId, characteristicId);
 
-    const result = await iface.ReadValue({});
+    await btLock.lock();
 
-    if (startNotif) {
-      await startNotifications(serviceId, characteristicId);
+    try {
+      const result = await iface.ReadValue({});
+
+      if (startNotif) {
+        await startNotifications(serviceId, characteristicId);
+      }
+
+      return result;
+    } finally {
+      btLock.unlock();
     }
-
-    return result;
   }
 
   return {
@@ -429,13 +453,23 @@ export async function initBle() {
     Transport: new Variant("s", "le"),
   });
 
+  process.on("exit", () => {
+    debug("Exiting");
+
+    shutDown().catch((err) => {
+      console.error(err);
+    });
+  });
+
   process.on("SIGINT", () => {
     debug("Caught interrupt signal");
 
-    close();
+    shutDown().catch((err) => {
+      console.error(err);
+    });
   });
 
-  function close() {
+  async function shutDown() {
     const promises = [];
 
     try {
@@ -461,11 +495,11 @@ export async function initBle() {
         );
       }
     } finally {
-      Promise.all(promises).finally(() => process.exit());
+      await Promise.all(promises);
     }
 
     bus?.disconnect();
   }
 
-  return { createSession, close };
+  return { createSession, shutDown };
 }
