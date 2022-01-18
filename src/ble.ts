@@ -2,6 +2,7 @@ import dbus, { Variant } from "dbus-next";
 import { debug } from "./debug";
 import { createEventTarget } from "./eventTarget";
 import { Device, Filter, matchesFilter } from "./filterMatcher";
+import { propagateHandlerError } from "./handlerErrorPropagator";
 import { createLock } from "./lock";
 
 const GS1 = "org.bluez.GattService1";
@@ -120,11 +121,13 @@ function createSession() {
       await adapterIface.StartDiscovery();
     }
 
-    const handle = (path: string, props?: Record<string, unknown>) => {
-      handleInterfaceAdded(path, props).catch((err: unknown) => {
-        console.error(err);
-      });
-    };
+    const handle = propagateHandlerError(
+      (path: string, props?: Record<string, unknown>) => {
+        handleInterfaceAdded(path, props).catch((err: unknown) => {
+          console.error(err);
+        });
+      }
+    );
 
     objectManagerIface.on("InterfacesAdded", handle);
 
@@ -153,23 +156,22 @@ function createSession() {
 
       const propertiesIface = deviceObj.getInterface(PROPS);
 
-      const handleDevicePropsChanged = (
-        iface: string,
-        changed: { RSSI?: unknown }
-      ) => {
-        debug("Device %s props changed:", iface, changed);
+      const handleDevicePropsChanged = propagateHandlerError(
+        (iface: string, changed: { RSSI?: unknown }) => {
+          debug("Device %s props changed:", iface, changed);
 
-        if (iface === D1 && changed.RSSI) {
-          fire("discover", {
-            peripheralId: path,
-            name: device?.Name?.value,
-            rssi:
-              changed.RSSI instanceof Variant
-                ? Number(changed.RSSI.value)
-                : 127,
-          });
+          if (iface === D1 && changed.RSSI) {
+            fire("discover", {
+              peripheralId: path,
+              name: device?.Name?.value,
+              rssi:
+                changed.RSSI instanceof Variant
+                  ? Number(changed.RSSI.value)
+                  : 127,
+            });
+          }
         }
-      };
+      );
 
       propertiesIface.on("PropertiesChanged", handleDevicePropsChanged);
 
@@ -201,34 +203,33 @@ function createSession() {
     const propertiesIface = deviceObj.getInterface(PROPS);
 
     const srPromise = new Promise<void>((resolve) => {
-      const handlePropertiesChanges = (
-        iface: string,
-        changed: Record<string, unknown>
-      ) => {
-        if (iface === D1) {
-          if (changed.ServicesResolved instanceof Variant) {
-            const { value } = changed.ServicesResolved;
+      const handlePropertiesChanges = propagateHandlerError(
+        (iface: string, changed: Record<string, unknown>) => {
+          if (iface === D1) {
+            if (changed.ServicesResolved instanceof Variant) {
+              const { value } = changed.ServicesResolved;
 
-            debug("ServicesResolved:", value);
+              debug("ServicesResolved:", value);
 
-            if (value) {
-              resolve();
+              if (value) {
+                resolve();
+              }
             }
-          }
 
-          if (changed.Connected instanceof Variant) {
-            const { value } = changed.Connected;
+            if (changed.Connected instanceof Variant) {
+              const { value } = changed.Connected;
 
-            debug("Connected:", value);
+              debug("Connected:", value);
 
-            if (!value) {
-              fire("disconnect", undefined);
+              if (!value) {
+                fire("disconnect", undefined);
 
-              deviceObj = undefined;
+                deviceObj = undefined;
+              }
             }
           }
         }
-      };
+      );
 
       propertiesIface.on("PropertiesChanged", handlePropertiesChanges);
 
@@ -345,15 +346,17 @@ function createSession() {
 
     const propertiesIface = obj.getInterface(PROPS);
 
-    const handleNotif = (iface: string, changed: Record<string, unknown>) => {
-      if (iface === GC1 && changed.Value instanceof Variant) {
-        fire("characteristicChange", {
-          serviceId,
-          characteristicId,
-          message: changed.Value.value,
-        });
+    const handleNotif = propagateHandlerError(
+      (iface: string, changed: Record<string, unknown>) => {
+        if (iface === GC1 && changed.Value instanceof Variant) {
+          fire("characteristicChange", {
+            serviceId,
+            characteristicId,
+            message: changed.Value.value,
+          });
+        }
       }
-    };
+    );
 
     propertiesIface.on("PropertiesChanged", handleNotif);
 
@@ -433,7 +436,7 @@ export async function initBle() {
 
   propertiesIface.on(
     "PropertiesChanged",
-    (iface, changed: Record<string, unknown>) => {
+    propagateHandlerError((iface, changed: Record<string, unknown>) => {
       debug("Adapter %s props changed:", iface, changed);
 
       if (
@@ -444,7 +447,7 @@ export async function initBle() {
 
         debug("Discovering:", discovering);
       }
-    }
+    })
   );
 
   await adapterIface.SetDiscoveryFilter({
