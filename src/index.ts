@@ -1,15 +1,12 @@
 import { createServer } from "https";
 import { readFileSync } from "fs";
 import { WebSocketServer } from "ws";
-import { initBle } from "./ble";
+import { initBle } from "@mz/bluez/dist/ble";
 import { Buffer } from "buffer";
-import { intelinoBufferToJson } from "./intelino";
-import { debug } from "./debug";
+import { debug } from "@mz/bluez/dist/debug";
 
 initBle()
   .then(({ createSession }) => {
-    const isIntelino = process.argv.includes("--intelino");
-
     const server = createServer(
       {
         cert: readFileSync("cert/scratch-device-manager.cer"),
@@ -186,18 +183,6 @@ initBle()
       session.on(
         "characteristicChange",
         ({ serviceId, characteristicId, message }) => {
-          if (isIntelino) {
-            console.log(
-              intelinoBufferToJson(
-                new DataView(
-                  message.buffer,
-                  message.byteOffset,
-                  message.byteLength
-                )
-              )
-            );
-          }
-
           send({
             method: "characteristicDidChange",
             params: {

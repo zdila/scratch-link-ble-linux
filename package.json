@@ -1,18 +1,16 @@
 {
-  "name": "scratch-link-node-ble",
+  "name": "scratch-link-bluez-ble",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
     "start": "ts-node src",
-    "debug": "ts-node src --debug",
-    "intelino": "ts-node src/intelino-example.ts"
+    "debug": "ts-node src --debug"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dbus-next": "^0.10.2",
+    "@mz/bluez": "https://github.com/zdila/node-bluez",
     "ts-node": "^10.4.0",
     "ws": "^8.4.0"
   },
